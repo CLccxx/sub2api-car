@@ -9,7 +9,7 @@ export interface BulkSubscriptionOperation {
 
 const pendingKeys = new Map<string, string>()
 
-function currentAdminId(): number | null {
+export function currentAdminId(): number | null {
   try {
     const user = JSON.parse(globalThis.localStorage?.getItem('auth_user') ?? 'null') as { id?: unknown } | null
     const id = user?.id
@@ -48,6 +48,10 @@ export function prepareBulkSubscriptionOperation(input: SubscriptionBulkActionRe
     request.daily = !!input.daily
     request.weekly = !!input.weekly
     request.monthly = !!input.monthly
+    if (input.active_only) {
+      request.active_only = true
+      request.execute_before = input.execute_before
+    }
   }
   const adminId = currentAdminId()
   const storageKey = adminId ? `sub2api:admin:subscription-bulk:${adminId}:${JSON.stringify(request)}` : null

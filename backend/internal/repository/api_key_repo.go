@@ -988,6 +988,8 @@ func groupEntityToService(g *dbent.Group) *service.Group {
 		SubscriptionType:                g.SubscriptionType,
 		DailyLimitUSD:                   g.DailyLimitUsd,
 		WeeklyLimitUSD:                  g.WeeklyLimitUsd,
+		CarpoolMembers:                  g.CarpoolMembers,
+		CarpoolQuotaSyncedAt:            g.CarpoolQuotaSyncedAt,
 		MonthlyLimitUSD:                 g.MonthlyLimitUsd,
 		AllowImageGeneration:            g.AllowImageGeneration,
 		AllowBatchImageGeneration:       g.AllowBatchImageGeneration,

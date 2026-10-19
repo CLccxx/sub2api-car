@@ -192,9 +192,13 @@ func ProvideOpenAIQuotaService(
 	privacyClientFactory PrivacyClientFactory,
 	referralClient OpenAIReferralClient,
 	openAIGatewayService *OpenAIGatewayService,
+	resetMonitorRepo CarpoolResetMonitorRepository,
+	resetCoordinator QuotaResetCoordinator,
 ) *OpenAIQuotaService {
 	service := NewOpenAIQuotaService(accountRepo, proxyRepo, tokenProvider, privacyClientFactory, referralClient)
 	service.agentIdentityWS = openAIGatewayService
+	service.resetReceiptRecorder = resetMonitorRepo
+	service.resetCoordinator = resetCoordinator
 	return service
 }
 
@@ -928,6 +932,10 @@ var ProviderSet = wire.NewSet(
 	NewTencentCaptchaService,
 	NewAliyunCaptchaService,
 	NewSubscriptionService,
+	ProvideSharedSubscriptionUsageService,
+	ProvideCarpoolQuotaService,
+	ProvideCarpoolResetMonitorService,
+	ProvideCarpoolResetVoteService,
 	wire.Bind(new(DefaultSubscriptionAssigner), new(*SubscriptionService)),
 	ProvideConcurrencyService,
 	ProvideUserMessageQueueService,

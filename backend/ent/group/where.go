@@ -130,6 +130,16 @@ func SubscriptionType(v string) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldSubscriptionType, v))
 }
 
+// CarpoolMembers applies equality check predicate on the "carpool_members" field. It's identical to CarpoolMembersEQ.
+func CarpoolMembers(v int) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldCarpoolMembers, v))
+}
+
+// CarpoolQuotaSyncedAt applies equality check predicate on the "carpool_quota_synced_at" field. It's identical to CarpoolQuotaSyncedAtEQ.
+func CarpoolQuotaSyncedAt(v time.Time) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldCarpoolQuotaSyncedAt, v))
+}
+
 // DailyLimitUsd applies equality check predicate on the "daily_limit_usd" field. It's identical to DailyLimitUsdEQ.
 func DailyLimitUsd(v float64) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldDailyLimitUsd, v))
@@ -1113,6 +1123,96 @@ func SubscriptionTypeEqualFold(v string) predicate.Group {
 // SubscriptionTypeContainsFold applies the ContainsFold predicate on the "subscription_type" field.
 func SubscriptionTypeContainsFold(v string) predicate.Group {
 	return predicate.Group(sql.FieldContainsFold(FieldSubscriptionType, v))
+}
+
+// CarpoolMembersEQ applies the EQ predicate on the "carpool_members" field.
+func CarpoolMembersEQ(v int) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldCarpoolMembers, v))
+}
+
+// CarpoolMembersNEQ applies the NEQ predicate on the "carpool_members" field.
+func CarpoolMembersNEQ(v int) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldCarpoolMembers, v))
+}
+
+// CarpoolMembersIn applies the In predicate on the "carpool_members" field.
+func CarpoolMembersIn(vs ...int) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldCarpoolMembers, vs...))
+}
+
+// CarpoolMembersNotIn applies the NotIn predicate on the "carpool_members" field.
+func CarpoolMembersNotIn(vs ...int) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldCarpoolMembers, vs...))
+}
+
+// CarpoolMembersGT applies the GT predicate on the "carpool_members" field.
+func CarpoolMembersGT(v int) predicate.Group {
+	return predicate.Group(sql.FieldGT(FieldCarpoolMembers, v))
+}
+
+// CarpoolMembersGTE applies the GTE predicate on the "carpool_members" field.
+func CarpoolMembersGTE(v int) predicate.Group {
+	return predicate.Group(sql.FieldGTE(FieldCarpoolMembers, v))
+}
+
+// CarpoolMembersLT applies the LT predicate on the "carpool_members" field.
+func CarpoolMembersLT(v int) predicate.Group {
+	return predicate.Group(sql.FieldLT(FieldCarpoolMembers, v))
+}
+
+// CarpoolMembersLTE applies the LTE predicate on the "carpool_members" field.
+func CarpoolMembersLTE(v int) predicate.Group {
+	return predicate.Group(sql.FieldLTE(FieldCarpoolMembers, v))
+}
+
+// CarpoolQuotaSyncedAtEQ applies the EQ predicate on the "carpool_quota_synced_at" field.
+func CarpoolQuotaSyncedAtEQ(v time.Time) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldCarpoolQuotaSyncedAt, v))
+}
+
+// CarpoolQuotaSyncedAtNEQ applies the NEQ predicate on the "carpool_quota_synced_at" field.
+func CarpoolQuotaSyncedAtNEQ(v time.Time) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldCarpoolQuotaSyncedAt, v))
+}
+
+// CarpoolQuotaSyncedAtIn applies the In predicate on the "carpool_quota_synced_at" field.
+func CarpoolQuotaSyncedAtIn(vs ...time.Time) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldCarpoolQuotaSyncedAt, vs...))
+}
+
+// CarpoolQuotaSyncedAtNotIn applies the NotIn predicate on the "carpool_quota_synced_at" field.
+func CarpoolQuotaSyncedAtNotIn(vs ...time.Time) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldCarpoolQuotaSyncedAt, vs...))
+}
+
+// CarpoolQuotaSyncedAtGT applies the GT predicate on the "carpool_quota_synced_at" field.
+func CarpoolQuotaSyncedAtGT(v time.Time) predicate.Group {
+	return predicate.Group(sql.FieldGT(FieldCarpoolQuotaSyncedAt, v))
+}
+
+// CarpoolQuotaSyncedAtGTE applies the GTE predicate on the "carpool_quota_synced_at" field.
+func CarpoolQuotaSyncedAtGTE(v time.Time) predicate.Group {
+	return predicate.Group(sql.FieldGTE(FieldCarpoolQuotaSyncedAt, v))
+}
+
+// CarpoolQuotaSyncedAtLT applies the LT predicate on the "carpool_quota_synced_at" field.
+func CarpoolQuotaSyncedAtLT(v time.Time) predicate.Group {
+	return predicate.Group(sql.FieldLT(FieldCarpoolQuotaSyncedAt, v))
+}
+
+// CarpoolQuotaSyncedAtLTE applies the LTE predicate on the "carpool_quota_synced_at" field.
+func CarpoolQuotaSyncedAtLTE(v time.Time) predicate.Group {
+	return predicate.Group(sql.FieldLTE(FieldCarpoolQuotaSyncedAt, v))
+}
+
+// CarpoolQuotaSyncedAtIsNil applies the IsNil predicate on the "carpool_quota_synced_at" field.
+func CarpoolQuotaSyncedAtIsNil() predicate.Group {
+	return predicate.Group(sql.FieldIsNull(FieldCarpoolQuotaSyncedAt))
+}
+
+// CarpoolQuotaSyncedAtNotNil applies the NotNil predicate on the "carpool_quota_synced_at" field.
+func CarpoolQuotaSyncedAtNotNil() predicate.Group {
+	return predicate.Group(sql.FieldNotNull(FieldCarpoolQuotaSyncedAt))
 }
 
 // DailyLimitUsdEQ applies the EQ predicate on the "daily_limit_usd" field.

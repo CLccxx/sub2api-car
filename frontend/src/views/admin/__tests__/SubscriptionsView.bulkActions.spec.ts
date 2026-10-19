@@ -2,13 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import SubscriptionsView from '../SubscriptionsView.vue'
 
-const { list, bulkAction, bulkAssign, listUsers, showError } = vi.hoisted(() => ({
-  list: vi.fn(), bulkAction: vi.fn(), bulkAssign: vi.fn(), listUsers: vi.fn(), showError: vi.fn()
+const { list, getResetQuotaTargets, bulkAction, bulkAssign, listUsers, showError } = vi.hoisted(() => ({
+  list: vi.fn(), getResetQuotaTargets: vi.fn(), bulkAction: vi.fn(), bulkAssign: vi.fn(), listUsers: vi.fn(), showError: vi.fn()
 }))
 
 vi.mock('@/api/admin', () => ({
   adminAPI: {
-    subscriptions: { list, bulkAction, bulkAssign },
+    subscriptions: { list, getResetQuotaTargets, bulkAction, bulkAssign },
     groups: { getAll: vi.fn().mockResolvedValue([]) },
     users: { list: listUsers }
   }
@@ -62,6 +62,24 @@ async function select(ids: number[]) {
 }
 
 describe('subscription bulk operations', () => {
+  it('offers a global reset without requiring a selection or inheriting table filters', async () => {
+    const selects = wrapper.findAllComponents({ name: 'Select' })
+    selects[1]!.vm.$emit('update:modelValue', '7')
+    selects[1]!.vm.$emit('change')
+    await flushPromises()
+    expect(wrapper.getComponent({ name: 'DataTable' }).props('selectedKeys')).toEqual([])
+    const button = wrapper.find('[data-test="reset-all-subscription-quotas"]')
+    expect(button.exists()).toBe(true)
+    getResetQuotaTargets.mockResolvedValueOnce({ subscription_ids: [] })
+    list.mockClear()
+    await button.trigger('click')
+    await flushPromises()
+    expect(getResetQuotaTargets).toHaveBeenCalledTimes(1)
+    expect(getResetQuotaTargets).toHaveBeenCalledWith({ signal: expect.any(AbortSignal) })
+    expect(list).not.toHaveBeenCalled()
+    expect(bulkAction).not.toHaveBeenCalled()
+  })
+
   it('uses eligible selected rows and retains failures and untouched selections after a partial result', async () => {
     bulkAction.mockResolvedValue({ success_count: 1, failed_count: 1, results: [
       { subscription_id: 1, success: true },

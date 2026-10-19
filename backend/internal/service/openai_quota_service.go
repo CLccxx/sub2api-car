@@ -46,6 +46,7 @@ type OpenAIRateLimitWindow struct {
 	LimitWindowSeconds int64   `json:"limit_window_seconds"`
 	ResetAfterSeconds  int64   `json:"reset_after_seconds"`
 	ResetAt            int64   `json:"reset_at"`
+	usedPercentMissing bool
 }
 
 // OpenAIRateLimit is a rate-limit envelope (primary + optional secondary window).
@@ -72,8 +73,9 @@ type OpenAIRateLimitResetCreditDetail struct {
 // OpenAIRateLimitResetCredits captures the "available_count" surfaced for the
 // rate_limit_reset_credit grant type, which the reset action consumes.
 type OpenAIRateLimitResetCredits struct {
-	AvailableCount int                                `json:"available_count"`
-	Credits        []OpenAIRateLimitResetCreditDetail `json:"credits,omitempty"`
+	AvailableCount        int                                `json:"available_count"`
+	Credits               []OpenAIRateLimitResetCreditDetail `json:"credits,omitempty"`
+	availableCountMissing bool
 }
 
 // OpenAICredits is the spendable Codex credit balance from /wham/usage.
@@ -81,9 +83,10 @@ type OpenAIRateLimitResetCredits struct {
 // nullable decimal string; keep that representation to preserve precision.
 // Source: Codex 41ece455b7fa, codex-backend-openapi-models/src/models/credit_status_details.rs.
 type OpenAICredits struct {
-	HasCredits bool    `json:"has_credits"`
-	Unlimited  bool    `json:"unlimited"`
-	Balance    *string `json:"balance"`
+	HasCredits    bool    `json:"has_credits"`
+	Unlimited     bool    `json:"unlimited"`
+	Balance       *string `json:"balance"`
+	statusMissing bool
 }
 
 type openAICreditsSnapshot struct {
@@ -139,6 +142,8 @@ type OpenAIQuotaService struct {
 	referralClient       OpenAIReferralClient
 	agentIdentityTaskMu  sync.Mutex
 	agentIdentityWS      agentIdentityWSConnectionInvalidator
+	resetReceiptRecorder CarpoolResetReceiptRecorder
+	resetCoordinator     QuotaResetCoordinator
 }
 
 // NewOpenAIQuotaService constructs a quota service. token provider is required —
@@ -158,6 +163,19 @@ func NewOpenAIQuotaService(
 		privacyClientFactory: privacyClientFactory,
 		referralClient:       referralClient,
 	}
+}
+
+type openAIQuotaReadOnlyKey struct{}
+
+func isOpenAIQuotaReadOnly(ctx context.Context) bool {
+	readOnly, _ := ctx.Value(openAIQuotaReadOnlyKey{}).(bool)
+	return readOnly
+}
+
+// QueryUsageReadOnly never registers/replaces agent tasks or invalidates active
+// gateway connections. Subscriber reads must not perform operator recovery.
+func (s *OpenAIQuotaService) QueryUsageReadOnly(ctx context.Context, accountID int64) (*OpenAIQuotaUsage, error) {
+	return s.QueryUsage(context.WithValue(ctx, openAIQuotaReadOnlyKey{}, true), accountID)
 }
 
 // QueryUsage fetches the latest rate-limit/usage snapshot for the given OpenAI
@@ -193,7 +211,7 @@ func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*
 			return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_QUOTA_REQUEST_FAILED", "upstream request failed: %v", err)
 		}
 		if !resp.IsSuccessState() {
-			if agentIdentity && !recovered && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, []byte(resp.String())) {
+			if agentIdentity && !isOpenAIQuotaReadOnly(ctx) && !recovered && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, []byte(resp.String())) {
 				recovered = true
 				if err := s.recoverAgentIdentityTask(ctx, accountID, expectedTaskID); err != nil {
 					return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_QUOTA_AUTH_FAILED", "agent identity task recovery failed: %v", err)
@@ -229,6 +247,7 @@ func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*
 		case details.CreditListPresent:
 			payload.RateLimitResetCredits.AvailableCount = details.AvailableCreditCount
 		}
+		payload.RateLimitResetCredits.availableCountMissing = false
 	}
 	return &payload, nil
 }
@@ -358,6 +377,15 @@ func (s *OpenAIQuotaService) ResetCreditTargeted(ctx context.Context, accountID 
 }
 
 func (s *OpenAIQuotaService) resetCredit(ctx context.Context, accountID int64, creditID, redeemRequestID string, targeted bool) (*OpenAIQuotaResetResult, error) {
+	if s.resetCoordinator != nil {
+		return s.resetCoordinator.Run(ctx, accountID, creditID, redeemRequestID, func(callCtx context.Context, card, request string) (*OpenAIQuotaResetResult, error) {
+			return s.resetCreditRaw(callCtx, accountID, card, request, targeted)
+		})
+	}
+	return s.resetCreditRaw(ctx, accountID, creditID, redeemRequestID, targeted)
+}
+
+func (s *OpenAIQuotaService) resetCreditRaw(ctx context.Context, accountID int64, creditID, redeemRequestID string, targeted bool) (*OpenAIQuotaResetResult, error) {
 	// Shadow guard: resetting credits via a shadow account would silently
 	// operate on the parent's quota; that is surprising and unwanted. Callers
 	// must reset the parent account directly.
@@ -435,6 +463,17 @@ func (s *OpenAIQuotaService) resetCredit(ctx context.Context, accountID int64, c
 		"code", payload.Code,
 		"windows_reset", payload.WindowsReset,
 	)
+	if payload.Code == "ok" && payload.WindowsReset > 0 && s.resetReceiptRecorder != nil {
+		// An upstream consume has already succeeded. Persist evidence even if the
+		// client disconnects, but never report storage failure as consume failure.
+		receiptCtx, receiptDone := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		err := s.resetReceiptRecorder.RecordResetReceipt(receiptCtx, accountID,
+			CarpoolResetIdentityHash(chatGPTAccountID), CarpoolResetIdentityHash(redeemRequestID), time.Now(), payload.WindowsReset)
+		receiptDone()
+		if err != nil {
+			slog.Warn("carpool_reset_receipt_failed", "account_id", accountID, "error", err)
+		}
+	}
 	return &payload, nil
 }
 
@@ -572,8 +611,10 @@ func (s *OpenAIQuotaService) buildCodexQuotaHeaders(ctx context.Context, account
 	if !account.IsOpenAIAgentIdentity() {
 		return headers, "", nil
 	}
-	if err := ensureAgentIdentityTaskForAccount(ctx, s.accountRepo, s.agentIdentityWS, &s.agentIdentityTaskMu, account, ""); err != nil {
-		return nil, "", err
+	if !isOpenAIQuotaReadOnly(ctx) {
+		if err := ensureAgentIdentityTaskForAccount(ctx, s.accountRepo, s.agentIdentityWS, &s.agentIdentityTaskMu, account, ""); err != nil {
+			return nil, "", err
+		}
 	}
 	key, err := agentIdentityKeyFromAccount(account)
 	if err != nil {

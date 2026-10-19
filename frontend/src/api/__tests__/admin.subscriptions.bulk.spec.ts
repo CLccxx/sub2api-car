@@ -1,11 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { subscriptionsAPI } from '../admin/subscriptions'
 
-const { post } = vi.hoisted(() => ({ post: vi.fn() }))
-vi.mock('../client', () => ({ apiClient: { post } }))
+const { post, get } = vi.hoisted(() => ({ post: vi.fn(), get: vi.fn() }))
+vi.mock('../client', () => ({ apiClient: { post, get } }))
 
 describe('admin subscription batch APIs', () => {
   beforeEach(() => vi.clearAllMocks())
+
+  it('reads the global reset snapshot without pagination or filters', async () => {
+    const signal = new AbortController().signal
+    get.mockResolvedValue({ data: { subscription_ids: [3, 5] } })
+    expect(await subscriptionsAPI.getResetQuotaTargets({ signal })).toEqual({ subscription_ids: [3, 5] })
+    expect(get).toHaveBeenCalledWith('/admin/subscriptions/reset-quota-targets', { signal })
+  })
 
   it('sends the explicit operation key and returns partial results', async () => {
     const request = { subscription_ids: [3, 5], action: 'extend' as const, days: 7 }

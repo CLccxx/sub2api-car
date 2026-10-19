@@ -27,7 +27,11 @@ func TestSubscriptionBulkActionRoutesRequireAdminAuthentication(t *testing.T) {
 	stepUp := servermiddleware.StepUpAuthMiddleware(func(c *gin.Context) { c.Next() })
 	RegisterAdminRoutes(router.Group("/api/v1"), handlers, adminAuth, auditLog, stepUp, nil, nil)
 
-	for _, path := range []string{"/api/v1/admin/subscriptions/bulk-action", "/api/v1/admin/subscriptions/bulk-assign"} {
+	for _, endpoint := range []struct{ method, path string }{
+		{http.MethodPost, "/api/v1/admin/subscriptions/bulk-action"},
+		{http.MethodPost, "/api/v1/admin/subscriptions/bulk-assign"},
+		{http.MethodGet, "/api/v1/admin/subscriptions/reset-quota-targets"},
+	} {
 		for _, tc := range []struct {
 			name       string
 			auth       string
@@ -36,9 +40,9 @@ func TestSubscriptionBulkActionRoutesRequireAdminAuthentication(t *testing.T) {
 			{name: "unauthenticated", wantStatus: http.StatusUnauthorized},
 			{name: "non-admin", auth: "Bearer user-token", wantStatus: http.StatusForbidden},
 		} {
-			t.Run(path+"/"+tc.name, func(t *testing.T) {
+			t.Run(endpoint.path+"/"+tc.name, func(t *testing.T) {
 				recorder := httptest.NewRecorder()
-				request := httptest.NewRequest(http.MethodPost, path, nil)
+				request := httptest.NewRequest(endpoint.method, endpoint.path, nil)
 				if tc.auth != "" {
 					request.Header.Set("Authorization", tc.auth)
 				}

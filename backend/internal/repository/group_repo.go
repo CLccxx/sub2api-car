@@ -11,6 +11,7 @@ import (
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/group"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -103,6 +104,7 @@ func createGroupRecord(ctx context.Context, client *dbent.Client, groupIn *servi
 		SetIsExclusive(groupIn.IsExclusive).
 		SetStatus(groupIn.Status).
 		SetSubscriptionType(groupIn.SubscriptionType).
+		SetCarpoolMembers(groupIn.CarpoolMembers).
 		SetNillableDailyLimitUsd(groupIn.DailyLimitUSD).
 		SetNillableWeeklyLimitUsd(groupIn.WeeklyLimitUSD).
 		SetNillableMonthlyLimitUsd(groupIn.MonthlyLimitUSD).
@@ -290,8 +292,8 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		SetIsExclusive(groupIn.IsExclusive).
 		SetStatus(groupIn.Status).
 		SetSubscriptionType(groupIn.SubscriptionType).
+		SetCarpoolMembers(groupIn.CarpoolMembers).
 		SetNillableDailyLimitUsd(groupIn.DailyLimitUSD).
-		SetNillableWeeklyLimitUsd(groupIn.WeeklyLimitUSD).
 		SetNillableMonthlyLimitUsd(groupIn.MonthlyLimitUSD).
 		SetAllowImageGeneration(groupIn.AllowImageGeneration).
 		SetAllowBatchImageGeneration(groupIn.AllowBatchImageGeneration).
@@ -342,10 +344,17 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 	} else {
 		builder = builder.ClearDailyLimitUsd()
 	}
-	if groupIn.WeeklyLimitUSD != nil {
-		builder = builder.SetWeeklyLimitUsd(*groupIn.WeeklyLimitUSD)
-	} else {
-		builder = builder.ClearWeeklyLimitUsd()
+	// The scheduled worker may have refreshed this after the admin read.
+	if !groupIn.PreserveCarpoolWeeklyLimit {
+		if groupIn.CarpoolMembers > 0 {
+			// Initialization must not overwrite a cap established after the read.
+			builder.Where(group.Or(group.WeeklyLimitUsdIsNil(), group.WeeklyLimitUsdEQ(0)))
+		}
+		if groupIn.WeeklyLimitUSD != nil {
+			builder = builder.SetWeeklyLimitUsd(*groupIn.WeeklyLimitUSD)
+		} else {
+			builder = builder.ClearWeeklyLimitUsd()
+		}
 	}
 	if groupIn.MonthlyLimitUSD != nil {
 		builder = builder.SetMonthlyLimitUsd(*groupIn.MonthlyLimitUSD)
@@ -433,9 +442,14 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 
 	updated, err := builder.Save(ctx)
 	if err != nil {
+		if groupIn.CarpoolMembers > 0 && !groupIn.PreserveCarpoolWeeklyLimit && dbent.IsNotFound(err) {
+			return infraerrors.Conflict("CARPOOL_QUOTA_CHANGED", "Weekly quota changed; refresh the group and try again")
+		}
 		return translatePersistenceError(err, service.ErrGroupNotFound, service.ErrGroupExists)
 	}
 	groupIn.UpdatedAt = updated.UpdatedAt
+	groupIn.WeeklyLimitUSD = updated.WeeklyLimitUsd
+	groupIn.CarpoolQuotaSyncedAt = updated.CarpoolQuotaSyncedAt
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventGroupChanged, nil, &groupIn.ID, nil); err != nil {
 		logger.LegacyPrintf("repository.group", "[SchedulerOutbox] enqueue group update failed: group=%d err=%v", groupIn.ID, err)
 	}

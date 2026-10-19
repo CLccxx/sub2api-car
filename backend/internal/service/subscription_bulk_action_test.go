@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -10,6 +11,43 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
+
+func TestBulkSubscriptionAction_GuardedResetSkipsInactive(t *testing.T) {
+	now := time.Now()
+	repo := &bulkActionSubscriptionRepo{subscriptions: map[int64]*UserSubscription{
+		1: {ID: 1, UserID: 1, GroupID: 10, Status: SubscriptionStatusActive, ExpiresAt: now.Add(time.Hour), DailyUsageUSD: 5},
+		2: {ID: 2, UserID: 2, GroupID: 10, Status: SubscriptionStatusActive, ExpiresAt: now.Add(-time.Second), DailyUsageUSD: 5},
+		3: {ID: 3, UserID: 3, GroupID: 10, Status: SubscriptionStatusActive, ExpiresAt: now.Add(time.Hour), DeletedAt: &now, DailyUsageUSD: 5},
+		4: {ID: 4, UserID: 4, GroupID: 10, Status: "suspended", ExpiresAt: now.Add(time.Hour), DailyUsageUSD: 5},
+	}}
+	svc := NewSubscriptionService(nil, repo, nil, nil, nil)
+	t.Cleanup(svc.Stop)
+	var input BulkSubscriptionActionInput
+	require.NoError(t, json.Unmarshal([]byte(fmt.Sprintf(`{"subscription_ids":[1,2,3,4],"action":"reset_quota","daily":true,"active_only":true,"execute_before":%q}`, now.Add(5*time.Minute).UTC().Format(time.RFC3339))), &input))
+	result, err := svc.BulkSubscriptionAction(context.Background(), &input)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1}, repo.mutations)
+	require.Equal(t, 1, result.SuccessCount)
+	require.Equal(t, 3, result.SkippedCount)
+	require.Zero(t, result.FailedCount)
+	for _, id := range []int64{2, 3, 4} {
+		require.Equal(t, float64(5), repo.subscriptions[id].DailyUsageUSD)
+	}
+}
+
+func TestBulkSubscriptionAction_GuardedResetRequiresShortFutureDeadline(t *testing.T) {
+	for _, deadline := range []string{"", time.Now().Add(-time.Minute).UTC().Format(time.RFC3339), time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339)} {
+		t.Run(deadline, func(t *testing.T) {
+			body := `{"subscription_ids":[1],"action":"reset_quota","daily":true,"active_only":true}`
+			if deadline != "" {
+				body = fmt.Sprintf(`{"subscription_ids":[1],"action":"reset_quota","daily":true,"active_only":true,"execute_before":%q}`, deadline)
+			}
+			var input BulkSubscriptionActionInput
+			require.NoError(t, json.Unmarshal([]byte(body), &input))
+			require.Error(t, input.Validate())
+		})
+	}
+}
 
 type bulkActionSubscriptionRepo struct {
 	UserSubscriptionRepository

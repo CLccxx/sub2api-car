@@ -94,6 +94,15 @@
           <!-- Right: Actions -->
           <div class="ml-auto flex flex-wrap items-center justify-end gap-3">
             <button
+              type="button"
+              class="btn btn-secondary"
+              data-test="reset-all-subscription-quotas"
+              @click="showResetAllQuotas = true"
+            >
+              <Icon name="refresh" size="md" class="mr-2" />
+              {{ t('admin.subscriptions.resetAll.button') }}
+            </button>
+            <button
               @click="loadSubscriptions"
               :disabled="loading"
               class="btn btn-secondary"
@@ -478,6 +487,12 @@
       </template>
     </TablePageLayout>
 
+    <ResetAllSubscriptionQuotasDialog
+      v-if="showResetAllQuotas"
+      @close="showResetAllQuotas = false"
+      @updated="loadSubscriptions"
+    />
+
     <BulkSubscriptionActionDialog
       v-if="bulkAction !== null"
       :show="true"
@@ -849,6 +864,7 @@ import type { SimpleUser } from '@/api/admin/usage'
 import type { SubscriptionBulkAction, SubscriptionBulkActionResult, BulkAssignSubscriptionResult } from '@/api/admin/subscriptions'
 import { useTableSelection } from '@/composables/useTableSelection'
 import BulkSubscriptionActionDialog from '@/components/admin/subscription/BulkSubscriptionActionDialog.vue'
+import ResetAllSubscriptionQuotasDialog from '@/components/admin/subscription/ResetAllSubscriptionQuotasDialog.vue'
 import type { Column } from '@/components/common/types'
 import { formatDateTimeToMinute } from '@/utils/format'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
@@ -1015,6 +1031,7 @@ let abortController: AbortController | null = null
 const { selectedIds, selectedCount, setSelectedIds, clear: clearSelection, removeMany: removeSelectedIds } =
   useTableSelection<UserSubscription>({ rows: subscriptions, getId: (subscription) => subscription.id })
 const bulkActions: SubscriptionBulkAction[] = ['extend', 'reset_quota', 'revoke', 'restore']
+const showResetAllQuotas = ref(false)
 const bulkAction = ref<SubscriptionBulkAction | null>(null)
 const bulkSubscriptions = ref<UserSubscription[]>([])
 const bulkTargets = computed(() => {

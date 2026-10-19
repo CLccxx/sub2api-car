@@ -22,12 +22,15 @@ export interface SubscriptionBulkActionRequest {
   daily?: boolean
   weekly?: boolean
   monthly?: boolean
+  active_only?: boolean
+  execute_before?: string
 }
 
 export interface SubscriptionBulkActionResult {
   success_count: number
   failed_count: number
-  results: Array<{ subscription_id: number; success: boolean; error?: string }>
+  skipped_count?: number
+  results: Array<{ subscription_id: number; success: boolean; skipped?: boolean; error?: string }>
 }
 
 export interface BulkAssignSubscriptionResult {
@@ -48,6 +51,16 @@ export async function bulkAction(
     '/admin/subscriptions/bulk-action',
     request,
     { headers: { 'Idempotency-Key': idempotencyKey } }
+  )
+  return data
+}
+
+export async function getResetQuotaTargets(
+  options?: { signal?: AbortSignal }
+): Promise<{ subscription_ids: number[] }> {
+  const { data } = await apiClient.get<{ subscription_ids: number[] }>(
+    '/admin/subscriptions/reset-quota-targets',
+    { signal: options?.signal }
   )
   return data
 }
@@ -231,6 +244,7 @@ export async function listByUser(
 
 export const subscriptionsAPI = {
   list,
+  getResetQuotaTargets,
   getById,
   getProgress,
   assign,

@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
@@ -95,6 +96,21 @@ func (h *SubscriptionHandler) List(c *gin.Context) {
 		out = append(out, *dto.UserSubscriptionFromServiceAdmin(&subscriptions[i]))
 	}
 	response.PaginatedWithResult(c, out, toResponsePagination(pagination))
+}
+
+// ResetQuotaTargets returns a global active-ID snapshot without table filters.
+// GET /api/v1/admin/subscriptions/reset-quota-targets
+func (h *SubscriptionHandler) ResetQuotaTargets(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	ids, err := h.subscriptionService.ListActiveSubscriptionIDs(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if ids == nil {
+		ids = []int64{}
+	}
+	response.Success(c, gin.H{"subscription_ids": ids})
 }
 
 // GetByID handles getting a subscription by ID
@@ -199,7 +215,23 @@ func (h *SubscriptionHandler) BulkAction(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	executeAdminIdempotentJSONWithTimeout(c, "admin.subscriptions.bulk-action", req, service.DefaultWriteIdempotencyTTL(), 2*time.Minute, func(ctx context.Context) (any, error) {
+	ttl := service.DefaultWriteIdempotencyTTL()
+	if req.ActiveOnly {
+		if strings.TrimSpace(c.GetHeader("Idempotency-Key")) == "" {
+			response.BadRequest(c, "Idempotency-Key is required for a guarded reset")
+			return
+		}
+		if service.DefaultIdempotencyCoordinator() == nil {
+			response.ErrorFrom(c, service.ErrIdempotencyStoreUnavail)
+			return
+		}
+		// Keep replay protection longer than any accepted execution deadline,
+		// even when the deployment configures a shorter default write TTL.
+		if ttl < service.GuardedSubscriptionResetReplayTTL {
+			ttl = service.GuardedSubscriptionResetReplayTTL
+		}
+	}
+	executeAdminIdempotentJSONWithTimeout(c, "admin.subscriptions.bulk-action", req, ttl, 2*time.Minute, func(ctx context.Context) (any, error) {
 		return h.subscriptionService.BulkSubscriptionAction(ctx, &req)
 	})
 }

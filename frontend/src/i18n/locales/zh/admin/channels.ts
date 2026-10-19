@@ -673,6 +673,36 @@ export default {
 
     // Subscriptions Management
     subscriptions: {
+      resetAll: {
+        button: '重置全部订阅配额',
+        title: '重置全站有效订阅配额',
+        scope: '范围：全站所有有效订阅，跨越分页，不受搜索、分组及平台筛选影响。已过期、已撤销的订阅不包含在名单中。',
+        loading: '正在获取全站有效订阅…',
+        confirmTargets: '即将重置 {count} 条有效订阅',
+        warning: '每日、每周、每月已用额度将归零，统计窗口按原有规则重置。不会修改额度上限、到期时间或历史请求记录。此操作无法撤销。',
+        empty: '当前没有可重置的有效订阅',
+        confirm: '确认全部重置',
+        progress: '已处理 {done} / {total} 条订阅',
+        completed: '处理完成：{done} / {total} 条订阅',
+        success: '成功',
+        failed: '失败',
+        skipped: '无效跳过',
+        replayExpired: '本批次已超过安全重试时限，已停止重试。请先核对这些订阅的实际用量，再结束本次操作；不要直接再次全部重置。',
+        endOperation: '结束本次操作',
+        uncertainTargets: '待核对的订阅编号',
+        failures: '重置失败的订阅',
+        resume: '继续本次重置',
+        retryFailed: '重试失败项（{count}）',
+        resumed: '已恢复本次操作的进度。确认继续后，仅处理尚未完成的订阅。',
+        interrupted: '操作已暂停，已完成的订阅不会重复处理。结果不明的批次将使用原请求继续确认。',
+        recoveryUnavailable: '无法保存恢复进度，请勿刷新或关闭此页面。',
+        reload: '重新获取名单',
+        loadFailed: '获取订阅名单失败，尚未重置任何配额。',
+        requestFailed: '重置请求失败，操作已暂停。',
+        invalidResponse: '服务器未返回完整批次结果，操作已暂停。',
+        invalidCheckpoint: '保存的重置进度无法读取。为避免重复重置，已停止操作。',
+        adminChanged: '管理员登录状态已变化，操作已暂停。请使用原管理员账号继续。'
+      },
       batchAssign: {
         enable: '批量分配订阅',
         hint: '搜索并添加多个用户，统一分配所选分组和有效期。每次最多 100 人。',

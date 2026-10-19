@@ -237,6 +237,47 @@ func (_u *GroupUpdate) SetNillableSubscriptionType(v *string) *GroupUpdate {
 	return _u
 }
 
+// SetCarpoolMembers sets the "carpool_members" field.
+func (_u *GroupUpdate) SetCarpoolMembers(v int) *GroupUpdate {
+	_u.mutation.ResetCarpoolMembers()
+	_u.mutation.SetCarpoolMembers(v)
+	return _u
+}
+
+// SetNillableCarpoolMembers sets the "carpool_members" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableCarpoolMembers(v *int) *GroupUpdate {
+	if v != nil {
+		_u.SetCarpoolMembers(*v)
+	}
+	return _u
+}
+
+// AddCarpoolMembers adds value to the "carpool_members" field.
+func (_u *GroupUpdate) AddCarpoolMembers(v int) *GroupUpdate {
+	_u.mutation.AddCarpoolMembers(v)
+	return _u
+}
+
+// SetCarpoolQuotaSyncedAt sets the "carpool_quota_synced_at" field.
+func (_u *GroupUpdate) SetCarpoolQuotaSyncedAt(v time.Time) *GroupUpdate {
+	_u.mutation.SetCarpoolQuotaSyncedAt(v)
+	return _u
+}
+
+// SetNillableCarpoolQuotaSyncedAt sets the "carpool_quota_synced_at" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableCarpoolQuotaSyncedAt(v *time.Time) *GroupUpdate {
+	if v != nil {
+		_u.SetCarpoolQuotaSyncedAt(*v)
+	}
+	return _u
+}
+
+// ClearCarpoolQuotaSyncedAt clears the value of the "carpool_quota_synced_at" field.
+func (_u *GroupUpdate) ClearCarpoolQuotaSyncedAt() *GroupUpdate {
+	_u.mutation.ClearCarpoolQuotaSyncedAt()
+	return _u
+}
+
 // SetDailyLimitUsd sets the "daily_limit_usd" field.
 func (_u *GroupUpdate) SetDailyLimitUsd(v float64) *GroupUpdate {
 	_u.mutation.ResetDailyLimitUsd()
@@ -1617,6 +1658,18 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.SubscriptionType(); ok {
 		_spec.SetField(group.FieldSubscriptionType, field.TypeString, value)
 	}
+	if value, ok := _u.mutation.CarpoolMembers(); ok {
+		_spec.SetField(group.FieldCarpoolMembers, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedCarpoolMembers(); ok {
+		_spec.AddField(group.FieldCarpoolMembers, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.CarpoolQuotaSyncedAt(); ok {
+		_spec.SetField(group.FieldCarpoolQuotaSyncedAt, field.TypeTime, value)
+	}
+	if _u.mutation.CarpoolQuotaSyncedAtCleared() {
+		_spec.ClearField(group.FieldCarpoolQuotaSyncedAt, field.TypeTime)
+	}
 	if value, ok := _u.mutation.DailyLimitUsd(); ok {
 		_spec.SetField(group.FieldDailyLimitUsd, field.TypeFloat64, value)
 	}
@@ -2428,6 +2481,47 @@ func (_u *GroupUpdateOne) SetNillableSubscriptionType(v *string) *GroupUpdateOne
 	if v != nil {
 		_u.SetSubscriptionType(*v)
 	}
+	return _u
+}
+
+// SetCarpoolMembers sets the "carpool_members" field.
+func (_u *GroupUpdateOne) SetCarpoolMembers(v int) *GroupUpdateOne {
+	_u.mutation.ResetCarpoolMembers()
+	_u.mutation.SetCarpoolMembers(v)
+	return _u
+}
+
+// SetNillableCarpoolMembers sets the "carpool_members" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableCarpoolMembers(v *int) *GroupUpdateOne {
+	if v != nil {
+		_u.SetCarpoolMembers(*v)
+	}
+	return _u
+}
+
+// AddCarpoolMembers adds value to the "carpool_members" field.
+func (_u *GroupUpdateOne) AddCarpoolMembers(v int) *GroupUpdateOne {
+	_u.mutation.AddCarpoolMembers(v)
+	return _u
+}
+
+// SetCarpoolQuotaSyncedAt sets the "carpool_quota_synced_at" field.
+func (_u *GroupUpdateOne) SetCarpoolQuotaSyncedAt(v time.Time) *GroupUpdateOne {
+	_u.mutation.SetCarpoolQuotaSyncedAt(v)
+	return _u
+}
+
+// SetNillableCarpoolQuotaSyncedAt sets the "carpool_quota_synced_at" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableCarpoolQuotaSyncedAt(v *time.Time) *GroupUpdateOne {
+	if v != nil {
+		_u.SetCarpoolQuotaSyncedAt(*v)
+	}
+	return _u
+}
+
+// ClearCarpoolQuotaSyncedAt clears the value of the "carpool_quota_synced_at" field.
+func (_u *GroupUpdateOne) ClearCarpoolQuotaSyncedAt() *GroupUpdateOne {
+	_u.mutation.ClearCarpoolQuotaSyncedAt()
 	return _u
 }
 
@@ -3840,6 +3934,18 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if value, ok := _u.mutation.SubscriptionType(); ok {
 		_spec.SetField(group.FieldSubscriptionType, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.CarpoolMembers(); ok {
+		_spec.SetField(group.FieldCarpoolMembers, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedCarpoolMembers(); ok {
+		_spec.AddField(group.FieldCarpoolMembers, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.CarpoolQuotaSyncedAt(); ok {
+		_spec.SetField(group.FieldCarpoolQuotaSyncedAt, field.TypeTime, value)
+	}
+	if _u.mutation.CarpoolQuotaSyncedAtCleared() {
+		_spec.ClearField(group.FieldCarpoolQuotaSyncedAt, field.TypeTime)
 	}
 	if value, ok := _u.mutation.DailyLimitUsd(); ok {
 		_spec.SetField(group.FieldDailyLimitUsd, field.TypeFloat64, value)

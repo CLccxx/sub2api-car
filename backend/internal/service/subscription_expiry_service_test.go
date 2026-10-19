@@ -60,6 +60,10 @@ func (r *subscriptionExpiryRepoStub) ListActiveByUserID(context.Context, int64) 
 	return nil, nil
 }
 
+func (r *subscriptionExpiryRepoStub) ListActiveIDs(context.Context) ([]int64, error) {
+	panic("unexpected ListActiveIDs call")
+}
+
 func (r *subscriptionExpiryRepoStub) ListByGroupID(context.Context, int64, pagination.PaginationParams) ([]UserSubscription, *pagination.PaginationResult, error) {
 	return nil, nil, nil
 }

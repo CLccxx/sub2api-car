@@ -623,6 +623,8 @@ export interface Group {
 }
 
 export interface AdminGroup extends Group {
+  carpool_members?: number
+  carpool_quota_synced_at?: string | null
   force_openai_fast: boolean
   free_openai_fast: boolean
   model_pricing: import('@/api/admin/channels').ChannelModelPricing[]
@@ -787,6 +789,7 @@ export interface UpdateApiKeyRequest {
 }
 
 export interface CreateGroupRequest {
+  carpool_members?: number
   name: string
   description?: string | null
   platform?: GroupPlatform
@@ -852,6 +855,7 @@ export interface CreateGroupRequest {
 }
 
 export interface UpdateGroupRequest {
+  carpool_members?: number
   name?: string
   description?: string | null
   platform?: GroupPlatform

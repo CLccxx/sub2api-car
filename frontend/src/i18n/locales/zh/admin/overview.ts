@@ -1064,6 +1064,13 @@ export default {
         validityHint: '分配给用户时订阅的有效天数',
         noLimit: '无限制'
       },
+      carpool: {
+        enabled: '拼车额度',
+        members: '拼车人数',
+        schedule: '额度更新时间',
+        scheduleValue: '北京时间 00 / 06 / 12 / 18 点',
+        lastUpdated: '最近同步'
+      },
       imagePricing: {
         title: '图片生成计费',
         description: '配置图片生成能力和图片基础单价，留空则使用默认价格',

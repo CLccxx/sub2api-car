@@ -46,6 +46,10 @@ const (
 	FieldPlatform = "platform"
 	// FieldSubscriptionType holds the string denoting the subscription_type field in the database.
 	FieldSubscriptionType = "subscription_type"
+	// FieldCarpoolMembers holds the string denoting the carpool_members field in the database.
+	FieldCarpoolMembers = "carpool_members"
+	// FieldCarpoolQuotaSyncedAt holds the string denoting the carpool_quota_synced_at field in the database.
+	FieldCarpoolQuotaSyncedAt = "carpool_quota_synced_at"
 	// FieldDailyLimitUsd holds the string denoting the daily_limit_usd field in the database.
 	FieldDailyLimitUsd = "daily_limit_usd"
 	// FieldWeeklyLimitUsd holds the string denoting the weekly_limit_usd field in the database.
@@ -238,6 +242,8 @@ var Columns = []string{
 	FieldDuplicateOperationID,
 	FieldPlatform,
 	FieldSubscriptionType,
+	FieldCarpoolMembers,
+	FieldCarpoolQuotaSyncedAt,
 	FieldDailyLimitUsd,
 	FieldWeeklyLimitUsd,
 	FieldMonthlyLimitUsd,
@@ -356,6 +362,8 @@ var (
 	DefaultSubscriptionType string
 	// SubscriptionTypeValidator is a validator for the "subscription_type" field. It is called by the builders before save.
 	SubscriptionTypeValidator func(string) error
+	// DefaultCarpoolMembers holds the default value on creation for the "carpool_members" field.
+	DefaultCarpoolMembers int
 	// DefaultDefaultValidityDays holds the default value on creation for the "default_validity_days" field.
 	DefaultDefaultValidityDays int
 	// DefaultAllowImageGeneration holds the default value on creation for the "allow_image_generation" field.
@@ -517,6 +525,16 @@ func ByPlatform(opts ...sql.OrderTermOption) OrderOption {
 // BySubscriptionType orders the results by the subscription_type field.
 func BySubscriptionType(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldSubscriptionType, opts...).ToFunc()
+}
+
+// ByCarpoolMembers orders the results by the carpool_members field.
+func ByCarpoolMembers(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldCarpoolMembers, opts...).ToFunc()
+}
+
+// ByCarpoolQuotaSyncedAt orders the results by the carpool_quota_synced_at field.
+func ByCarpoolQuotaSyncedAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldCarpoolQuotaSyncedAt, opts...).ToFunc()
 }
 
 // ByDailyLimitUsd orders the results by the daily_limit_usd field.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/util/logredact"
@@ -11,14 +12,21 @@ import (
 
 const MaxBulkSubscriptionActions = 100
 
+const MaxGuardedSubscriptionResetLifetime = 10 * time.Minute
+const GuardedSubscriptionResetReplayTTL = time.Hour
+
+var errBulkSubscriptionInactive = errors.New("subscription is no longer active")
+
 // BulkSubscriptionActionInput applies one operation to a bounded set of subscriptions.
 type BulkSubscriptionActionInput struct {
-	SubscriptionIDs []int64 `json:"subscription_ids"`
-	Action          string  `json:"action"`
-	Days            int     `json:"days,omitempty"`
-	Daily           bool    `json:"daily,omitempty"`
-	Weekly          bool    `json:"weekly,omitempty"`
-	Monthly         bool    `json:"monthly,omitempty"`
+	SubscriptionIDs []int64    `json:"subscription_ids"`
+	Action          string     `json:"action"`
+	Days            int        `json:"days,omitempty"`
+	Daily           bool       `json:"daily,omitempty"`
+	Weekly          bool       `json:"weekly,omitempty"`
+	Monthly         bool       `json:"monthly,omitempty"`
+	ActiveOnly      bool       `json:"active_only,omitempty"`
+	ExecuteBefore   *time.Time `json:"execute_before,omitempty"`
 }
 
 // Validate checks the entire request before any subscription is changed.
@@ -32,6 +40,13 @@ func (input *BulkSubscriptionActionInput) Validate() error {
 	for _, id := range input.SubscriptionIDs {
 		if id <= 0 {
 			return infraerrors.BadRequest("INVALID_SUBSCRIPTION_ID", "subscription IDs must be positive")
+		}
+	}
+	if input.ActiveOnly || input.ExecuteBefore != nil {
+		now := time.Now()
+		if input.Action != "reset_quota" || !input.ActiveOnly || input.ExecuteBefore == nil ||
+			!input.ExecuteBefore.After(now) || input.ExecuteBefore.After(now.Add(MaxGuardedSubscriptionResetLifetime)) {
+			return infraerrors.BadRequest("INVALID_RESET_DEADLINE", "guarded reset requires an execution deadline within the next 10 minutes")
 		}
 	}
 	switch input.Action {
@@ -54,11 +69,13 @@ type BulkSubscriptionActionItemResult struct {
 	SubscriptionID int64  `json:"subscription_id"`
 	Success        bool   `json:"success"`
 	Error          string `json:"error,omitempty"`
+	Skipped        bool   `json:"skipped,omitempty"`
 }
 
 type BulkSubscriptionActionResult struct {
 	SuccessCount int                                `json:"success_count"`
 	FailedCount  int                                `json:"failed_count"`
+	SkippedCount int                                `json:"skipped_count,omitempty"`
 	Results      []BulkSubscriptionActionItemResult `json:"results"`
 }
 
@@ -90,6 +107,25 @@ func (s *SubscriptionService) BulkSubscriptionAction(ctx context.Context, input 
 				case "extend":
 					changed, mutationErr = s.ExtendSubscription(txCtx, id, input.Days)
 				case "reset_quota":
+					if input.ActiveOnly {
+						if !input.ExecuteBefore.After(s.now()) {
+							return infraerrors.BadRequest("RESET_DEADLINE_EXCEEDED", "reset execution deadline has passed")
+						}
+						sub, readErr := s.userSubRepo.GetByIDForUpdate(txCtx, id)
+						if errors.Is(readErr, ErrSubscriptionNotFound) {
+							return errBulkSubscriptionInactive
+						}
+						if readErr != nil {
+							return readErr
+						}
+						now := s.now()
+						if !input.ExecuteBefore.After(now) {
+							return infraerrors.BadRequest("RESET_DEADLINE_EXCEEDED", "reset execution deadline has passed")
+						}
+						if sub.DeletedAt != nil || sub.Status != SubscriptionStatusActive || !sub.ExpiresAt.After(now) {
+							return errBulkSubscriptionInactive
+						}
+					}
 					changed, mutationErr = s.AdminResetQuota(txCtx, id, input.Daily, input.Weekly, input.Monthly)
 				case "revoke":
 					changed, mutationErr = s.userSubRepo.GetByID(txCtx, id)
@@ -110,7 +146,10 @@ func (s *SubscriptionService) BulkSubscriptionAction(ctx context.Context, input 
 			}
 		}
 		item := BulkSubscriptionActionItemResult{SubscriptionID: id, Success: err == nil}
-		if err != nil {
+		if errors.Is(err, errBulkSubscriptionInactive) {
+			result.SkippedCount++
+			item.Skipped = true
+		} else if err != nil {
 			result.FailedCount++
 			item.Error = infraerrors.Message(err)
 			if errors.Is(err, context.Canceled) {

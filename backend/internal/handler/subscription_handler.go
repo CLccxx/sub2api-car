@@ -33,12 +33,16 @@ type SubscriptionProgressInfo struct {
 // SubscriptionHandler handles user subscription operations
 type SubscriptionHandler struct {
 	subscriptionService *service.SubscriptionService
+	sharedUsage         sharedSubscriptionUsageReader
+	resetVote           resetVoteService
 }
 
 // NewSubscriptionHandler creates a new user subscription handler
-func NewSubscriptionHandler(subscriptionService *service.SubscriptionService) *SubscriptionHandler {
+func NewSubscriptionHandler(subscriptionService *service.SubscriptionService, sharedUsage *service.SharedSubscriptionUsageService, resetVote *service.CarpoolResetVoteService) *SubscriptionHandler {
 	return &SubscriptionHandler{
 		subscriptionService: subscriptionService,
+		sharedUsage:         sharedUsage,
+		resetVote:           resetVote,
 	}
 }
 

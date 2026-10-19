@@ -491,6 +491,7 @@
           <label class="input-label">{{ t("admin.groups.form.name") }}</label>
           <input
             v-model="createForm.name"
+            :readonly="createForm.carpool_members > 0"
             type="text"
             required
             class="input"
@@ -504,6 +505,7 @@
           }}</label>
           <textarea
             v-model="createForm.description"
+            :readonly="createForm.carpool_members > 0"
             rows="3"
             class="input"
             :placeholder="t('admin.groups.optionalDescription')"
@@ -722,11 +724,17 @@
           </div>
 
           <!-- Subscription limits (only show when subscription type is selected) -->
+          <CarpoolSettings
+            v-if="createForm.platform === 'openai' && createForm.subscription_type === 'subscription'"
+            :members="createForm.carpool_members"
+            class="my-4"
+            @update:members="applyCarpoolMembers(createForm, $event)"
+          />
           <div
             v-if="createForm.subscription_type === 'subscription'"
             class="space-y-4 border-l-2 border-primary-200 pl-4 dark:border-primary-800"
           >
-            <div>
+            <div v-if="!createForm.carpool_members">
               <label class="input-label">{{
                 t("admin.groups.subscription.dailyLimit")
               }}</label>
@@ -745,6 +753,7 @@
               }}</label>
               <input
                 v-model.number="createForm.weekly_limit_usd"
+                :readonly="createForm.carpool_members > 0"
                 type="number"
                 step="0.01"
                 min="0"
@@ -752,7 +761,7 @@
                 :placeholder="t('admin.groups.subscription.noLimit')"
               />
             </div>
-            <div>
+            <div v-if="!createForm.carpool_members">
               <label class="input-label">{{
                 t("admin.groups.subscription.monthlyLimit")
               }}</label>
@@ -2130,6 +2139,7 @@
           <label class="input-label">{{ t("admin.groups.form.name") }}</label>
           <input
             v-model="editForm.name"
+            :readonly="editForm.carpool_members > 0"
             type="text"
             required
             class="input"
@@ -2142,6 +2152,7 @@
           }}</label>
           <textarea
             v-model="editForm.description"
+            :readonly="editForm.carpool_members > 0"
             rows="3"
             class="input"
           ></textarea>
@@ -2362,11 +2373,18 @@
           </div>
 
           <!-- Subscription limits (only show when subscription type is selected) -->
+          <CarpoolSettings
+            v-if="editForm.platform === 'openai' && editForm.subscription_type === 'subscription'"
+            :members="editForm.carpool_members"
+            :synced-at="editingGroup.carpool_quota_synced_at"
+            class="my-4"
+            @update:members="applyCarpoolMembers(editForm, $event)"
+          />
           <div
             v-if="editForm.subscription_type === 'subscription'"
             class="space-y-4 border-l-2 border-primary-200 pl-4 dark:border-primary-800"
           >
-            <div>
+            <div v-if="!editForm.carpool_members">
               <label class="input-label">{{
                 t("admin.groups.subscription.dailyLimit")
               }}</label>
@@ -2385,6 +2403,7 @@
               }}</label>
               <input
                 v-model.number="editForm.weekly_limit_usd"
+                :readonly="editForm.carpool_members > 0"
                 type="number"
                 step="0.01"
                 min="0"
@@ -2392,7 +2411,7 @@
                 :placeholder="t('admin.groups.subscription.noLimit')"
               />
             </div>
-            <div>
+            <div v-if="!editForm.carpool_members">
               <label class="input-label">{{
                 t("admin.groups.subscription.monthlyLimit")
               }}</label>
@@ -4300,6 +4319,8 @@ import PlatformIcon from "@/components/common/PlatformIcon.vue";
 import Icon from "@/components/icons/Icon.vue";
 import GroupRateMultipliersModal from "@/components/admin/group/GroupRateMultipliersModal.vue";
 import GroupRPMOverridesModal from "@/components/admin/group/GroupRPMOverridesModal.vue";
+import CarpoolSettings from "@/components/admin/group/CarpoolSettings.vue";
+import { applyCarpoolMembers } from "@/components/admin/group/carpoolSettings";
 import GroupCapacityBadge from "@/components/common/GroupCapacityBadge.vue";
 import ReasoningEffortPolicyFields from "@/components/admin/group/ReasoningEffortPolicyFields.vue";
 import CodexManifestAccountsField from "@/components/admin/group/CodexManifestAccountsField.vue";
@@ -4938,6 +4959,7 @@ const submitEditAllowlistCustomEntry = () => {
 };
 
 const createForm = reactive({
+  carpool_members: 0,
   name: "",
   description: "",
   platform: "anthropic" as GroupPlatform,
@@ -5302,6 +5324,7 @@ const convertApiFormatToRoutingRules = async (
 };
 
 const editForm = reactive({
+  carpool_members: 0,
   name: "",
   description: "",
   platform: "anthropic" as GroupPlatform,
@@ -5771,6 +5794,7 @@ const closeCreateModal = () => {
   createForm.rate_multiplier = 1.0;
   createForm.is_exclusive = false;
   createForm.subscription_type = "standard";
+  createForm.carpool_members = 0;
   createForm.daily_limit_usd = null;
   createForm.weekly_limit_usd = null;
   createForm.monthly_limit_usd = null;
@@ -6056,6 +6080,8 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.daily_limit_usd = group.daily_limit_usd;
   editForm.weekly_limit_usd = group.weekly_limit_usd;
   editForm.monthly_limit_usd = group.monthly_limit_usd;
+  editForm.carpool_members = group.carpool_members ?? 0;
+  if (editForm.carpool_members) applyCarpoolMembers(editForm, editForm.carpool_members);
   editForm.long_context_pricing_enabled =
     group.long_context_pricing_enabled ?? true;
   editForm.force_openai_fast = group.force_openai_fast ?? false;
@@ -6650,6 +6676,7 @@ const confirmDelete = async () => {
 watch(
   () => createForm.subscription_type,
   (newVal) => {
+    if (newVal !== "subscription") createForm.carpool_members = 0;
     if (newVal === "subscription") {
       createForm.is_exclusive = true;
       createForm.fallback_group_id_on_invalid_request = null;
@@ -6666,6 +6693,7 @@ watch(
 watch(
   () => editForm.subscription_type,
   (newVal) => {
+    if (newVal !== "subscription") editForm.carpool_members = 0;
     if (newVal !== "subscription") {
       editForm.peak_rate_enabled = false;
       editForm.peak_start = "";
@@ -6678,6 +6706,7 @@ watch(
 watch(
   () => createForm.platform,
   (newVal) => {
+    if (newVal !== "openai") createForm.carpool_members = 0;
     if (!["anthropic", "antigravity"].includes(newVal)) {
       createForm.fallback_group_id_on_invalid_request = null;
     }
@@ -6735,6 +6764,7 @@ watch(
 watch(
   () => editForm.platform,
   (newVal) => {
+    if (newVal !== "openai") editForm.carpool_members = 0;
     if (!["anthropic", "antigravity"].includes(newVal)) {
       editForm.fallback_group_id_on_invalid_request = null;
     }

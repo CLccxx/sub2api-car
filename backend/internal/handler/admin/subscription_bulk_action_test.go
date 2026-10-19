@@ -19,6 +19,60 @@ type bulkActionHandlerSubscriptionRepo struct {
 	service.UserSubscriptionRepository
 	sub         *service.UserSubscription
 	extendCalls int
+	resetCalls  int
+}
+
+func (r *bulkActionHandlerSubscriptionRepo) ResetUsageWindows(_ context.Context, _ int64, _, _, _ bool, _, _ time.Time) error {
+	r.resetCalls++
+	return nil
+}
+
+func TestSubscriptionBulkAction_GuardedResetReplayAndEligibility(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := service.DefaultIdempotencyConfig()
+	cfg.DefaultTTL = time.Millisecond
+	store := newMemoryIdempotencyRepoStub()
+	service.SetDefaultIdempotencyCoordinator(service.NewIdempotencyCoordinator(store, cfg))
+	t.Cleanup(func() { service.SetDefaultIdempotencyCoordinator(nil) })
+	now := time.Now()
+	repo := &bulkActionHandlerSubscriptionRepo{sub: &service.UserSubscription{ID: 1, UserID: 1, GroupID: 10, Status: service.SubscriptionStatusActive, ExpiresAt: now.Add(time.Hour)}}
+	svc := service.NewSubscriptionService(nil, repo, nil, nil, nil)
+	t.Cleanup(svc.Stop)
+	router := gin.New()
+	path := "/api/v1/admin/subscriptions/bulk-action"
+	router.POST(path, NewSubscriptionHandler(svc).BulkAction)
+	body := fmt.Sprintf(`{"subscription_ids":[1],"action":"reset_quota","daily":true,"active_only":true,"execute_before":%q}`, now.Add(5*time.Minute).UTC().Format(time.RFC3339))
+	missingKey := bulkActionHandlerRequest(router, path, body, "")
+	require.Equal(t, http.StatusBadRequest, missingKey.Code)
+	first := bulkActionHandlerRequest(router, path, body, "global-reset")
+	require.Equal(t, http.StatusOK, first.Code, first.Body.String())
+	require.Equal(t, 1, repo.resetCalls)
+	store.mu.Lock()
+	for _, record := range store.data {
+		require.True(t, record.ExpiresAt.After(now.Add(59*time.Minute)))
+	}
+	store.mu.Unlock()
+	repo.sub.ExpiresAt = now.Add(-time.Second)
+	replayed := bulkActionHandlerRequest(router, path, body, "global-reset")
+	require.Equal(t, http.StatusOK, replayed.Code, replayed.Body.String())
+	require.Equal(t, "true", replayed.Header().Get("X-Idempotency-Replayed"))
+	require.JSONEq(t, first.Body.String(), replayed.Body.String())
+	require.Equal(t, 1, repo.resetCalls)
+	inactive := bulkActionHandlerRequest(router, path, body, "global-reset-new-request")
+	require.Equal(t, http.StatusOK, inactive.Code, inactive.Body.String())
+	require.Contains(t, inactive.Body.String(), `"skipped_count":1`)
+	require.Equal(t, 1, repo.resetCalls)
+}
+
+func TestSubscriptionBulkAction_GuardedResetRequiresReplayCoordinator(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service.SetDefaultIdempotencyCoordinator(nil)
+	router := gin.New()
+	path := "/api/v1/admin/subscriptions/bulk-action"
+	router.POST(path, NewSubscriptionHandler(nil).BulkAction)
+	body := fmt.Sprintf(`{"subscription_ids":[1],"action":"reset_quota","daily":true,"active_only":true,"execute_before":%q}`, time.Now().Add(5*time.Minute).UTC().Format(time.RFC3339))
+	result := bulkActionHandlerRequest(router, path, body, "guarded-no-coordinator")
+	require.Equal(t, http.StatusServiceUnavailable, result.Code, result.Body.String())
 }
 
 type cancellationAwareBulkActionRepo struct {

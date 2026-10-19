@@ -82,6 +82,8 @@ func (Group) Fields() []ent.Field {
 		field.String("subscription_type").
 			MaxLen(20).
 			Default(domain.SubscriptionTypeStandard),
+		field.Int("carpool_members").Default(0),
+		field.Time("carpool_quota_synced_at").Optional().Nillable(),
 		field.Float("daily_limit_usd").
 			Optional().
 			Nillable().

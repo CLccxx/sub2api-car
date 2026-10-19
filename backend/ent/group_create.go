@@ -232,6 +232,34 @@ func (_c *GroupCreate) SetNillableSubscriptionType(v *string) *GroupCreate {
 	return _c
 }
 
+// SetCarpoolMembers sets the "carpool_members" field.
+func (_c *GroupCreate) SetCarpoolMembers(v int) *GroupCreate {
+	_c.mutation.SetCarpoolMembers(v)
+	return _c
+}
+
+// SetNillableCarpoolMembers sets the "carpool_members" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableCarpoolMembers(v *int) *GroupCreate {
+	if v != nil {
+		_c.SetCarpoolMembers(*v)
+	}
+	return _c
+}
+
+// SetCarpoolQuotaSyncedAt sets the "carpool_quota_synced_at" field.
+func (_c *GroupCreate) SetCarpoolQuotaSyncedAt(v time.Time) *GroupCreate {
+	_c.mutation.SetCarpoolQuotaSyncedAt(v)
+	return _c
+}
+
+// SetNillableCarpoolQuotaSyncedAt sets the "carpool_quota_synced_at" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableCarpoolQuotaSyncedAt(v *time.Time) *GroupCreate {
+	if v != nil {
+		_c.SetCarpoolQuotaSyncedAt(*v)
+	}
+	return _c
+}
+
 // SetDailyLimitUsd sets the "daily_limit_usd" field.
 func (_c *GroupCreate) SetDailyLimitUsd(v float64) *GroupCreate {
 	_c.mutation.SetDailyLimitUsd(v)
@@ -1083,6 +1111,10 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultSubscriptionType
 		_c.mutation.SetSubscriptionType(v)
 	}
+	if _, ok := _c.mutation.CarpoolMembers(); !ok {
+		v := group.DefaultCarpoolMembers
+		_c.mutation.SetCarpoolMembers(v)
+	}
 	if _, ok := _c.mutation.DefaultValidityDays(); !ok {
 		v := group.DefaultDefaultValidityDays
 		_c.mutation.SetDefaultValidityDays(v)
@@ -1286,6 +1318,9 @@ func (_c *GroupCreate) check() error {
 		if err := group.SubscriptionTypeValidator(v); err != nil {
 			return &ValidationError{Name: "subscription_type", err: fmt.Errorf(`ent: validator failed for field "Group.subscription_type": %w`, err)}
 		}
+	}
+	if _, ok := _c.mutation.CarpoolMembers(); !ok {
+		return &ValidationError{Name: "carpool_members", err: errors.New(`ent: missing required field "Group.carpool_members"`)}
 	}
 	if _, ok := _c.mutation.DefaultValidityDays(); !ok {
 		return &ValidationError{Name: "default_validity_days", err: errors.New(`ent: missing required field "Group.default_validity_days"`)}
@@ -1504,6 +1539,14 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.SubscriptionType(); ok {
 		_spec.SetField(group.FieldSubscriptionType, field.TypeString, value)
 		_node.SubscriptionType = value
+	}
+	if value, ok := _c.mutation.CarpoolMembers(); ok {
+		_spec.SetField(group.FieldCarpoolMembers, field.TypeInt, value)
+		_node.CarpoolMembers = value
+	}
+	if value, ok := _c.mutation.CarpoolQuotaSyncedAt(); ok {
+		_spec.SetField(group.FieldCarpoolQuotaSyncedAt, field.TypeTime, value)
+		_node.CarpoolQuotaSyncedAt = &value
 	}
 	if value, ok := _c.mutation.DailyLimitUsd(); ok {
 		_spec.SetField(group.FieldDailyLimitUsd, field.TypeFloat64, value)
@@ -2042,6 +2085,42 @@ func (u *GroupUpsert) SetSubscriptionType(v string) *GroupUpsert {
 // UpdateSubscriptionType sets the "subscription_type" field to the value that was provided on create.
 func (u *GroupUpsert) UpdateSubscriptionType() *GroupUpsert {
 	u.SetExcluded(group.FieldSubscriptionType)
+	return u
+}
+
+// SetCarpoolMembers sets the "carpool_members" field.
+func (u *GroupUpsert) SetCarpoolMembers(v int) *GroupUpsert {
+	u.Set(group.FieldCarpoolMembers, v)
+	return u
+}
+
+// UpdateCarpoolMembers sets the "carpool_members" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateCarpoolMembers() *GroupUpsert {
+	u.SetExcluded(group.FieldCarpoolMembers)
+	return u
+}
+
+// AddCarpoolMembers adds v to the "carpool_members" field.
+func (u *GroupUpsert) AddCarpoolMembers(v int) *GroupUpsert {
+	u.Add(group.FieldCarpoolMembers, v)
+	return u
+}
+
+// SetCarpoolQuotaSyncedAt sets the "carpool_quota_synced_at" field.
+func (u *GroupUpsert) SetCarpoolQuotaSyncedAt(v time.Time) *GroupUpsert {
+	u.Set(group.FieldCarpoolQuotaSyncedAt, v)
+	return u
+}
+
+// UpdateCarpoolQuotaSyncedAt sets the "carpool_quota_synced_at" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateCarpoolQuotaSyncedAt() *GroupUpsert {
+	u.SetExcluded(group.FieldCarpoolQuotaSyncedAt)
+	return u
+}
+
+// ClearCarpoolQuotaSyncedAt clears the value of the "carpool_quota_synced_at" field.
+func (u *GroupUpsert) ClearCarpoolQuotaSyncedAt() *GroupUpsert {
+	u.SetNull(group.FieldCarpoolQuotaSyncedAt)
 	return u
 }
 
@@ -3176,6 +3255,48 @@ func (u *GroupUpsertOne) SetSubscriptionType(v string) *GroupUpsertOne {
 func (u *GroupUpsertOne) UpdateSubscriptionType() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateSubscriptionType()
+	})
+}
+
+// SetCarpoolMembers sets the "carpool_members" field.
+func (u *GroupUpsertOne) SetCarpoolMembers(v int) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetCarpoolMembers(v)
+	})
+}
+
+// AddCarpoolMembers adds v to the "carpool_members" field.
+func (u *GroupUpsertOne) AddCarpoolMembers(v int) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddCarpoolMembers(v)
+	})
+}
+
+// UpdateCarpoolMembers sets the "carpool_members" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateCarpoolMembers() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateCarpoolMembers()
+	})
+}
+
+// SetCarpoolQuotaSyncedAt sets the "carpool_quota_synced_at" field.
+func (u *GroupUpsertOne) SetCarpoolQuotaSyncedAt(v time.Time) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetCarpoolQuotaSyncedAt(v)
+	})
+}
+
+// UpdateCarpoolQuotaSyncedAt sets the "carpool_quota_synced_at" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateCarpoolQuotaSyncedAt() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateCarpoolQuotaSyncedAt()
+	})
+}
+
+// ClearCarpoolQuotaSyncedAt clears the value of the "carpool_quota_synced_at" field.
+func (u *GroupUpsertOne) ClearCarpoolQuotaSyncedAt() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearCarpoolQuotaSyncedAt()
 	})
 }
 
@@ -4622,6 +4743,48 @@ func (u *GroupUpsertBulk) SetSubscriptionType(v string) *GroupUpsertBulk {
 func (u *GroupUpsertBulk) UpdateSubscriptionType() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateSubscriptionType()
+	})
+}
+
+// SetCarpoolMembers sets the "carpool_members" field.
+func (u *GroupUpsertBulk) SetCarpoolMembers(v int) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetCarpoolMembers(v)
+	})
+}
+
+// AddCarpoolMembers adds v to the "carpool_members" field.
+func (u *GroupUpsertBulk) AddCarpoolMembers(v int) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddCarpoolMembers(v)
+	})
+}
+
+// UpdateCarpoolMembers sets the "carpool_members" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateCarpoolMembers() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateCarpoolMembers()
+	})
+}
+
+// SetCarpoolQuotaSyncedAt sets the "carpool_quota_synced_at" field.
+func (u *GroupUpsertBulk) SetCarpoolQuotaSyncedAt(v time.Time) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetCarpoolQuotaSyncedAt(v)
+	})
+}
+
+// UpdateCarpoolQuotaSyncedAt sets the "carpool_quota_synced_at" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateCarpoolQuotaSyncedAt() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateCarpoolQuotaSyncedAt()
+	})
+}
+
+// ClearCarpoolQuotaSyncedAt clears the value of the "carpool_quota_synced_at" field.
+func (u *GroupUpsertBulk) ClearCarpoolQuotaSyncedAt() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearCarpoolQuotaSyncedAt()
 	})
 }
 

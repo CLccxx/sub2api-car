@@ -22098,6 +22098,9 @@ type GroupMutation struct {
 	duplicate_operation_id                  *string
 	platform                                *string
 	subscription_type                       *string
+	carpool_members                         *int
+	addcarpool_members                      *int
+	carpool_quota_synced_at                 *time.Time
 	daily_limit_usd                         *float64
 	adddaily_limit_usd                      *float64
 	weekly_limit_usd                        *float64
@@ -22916,6 +22919,111 @@ func (m *GroupMutation) OldSubscriptionType(ctx context.Context) (v string, err 
 // ResetSubscriptionType resets all changes to the "subscription_type" field.
 func (m *GroupMutation) ResetSubscriptionType() {
 	m.subscription_type = nil
+}
+
+// SetCarpoolMembers sets the "carpool_members" field.
+func (m *GroupMutation) SetCarpoolMembers(i int) {
+	m.carpool_members = &i
+	m.addcarpool_members = nil
+}
+
+// CarpoolMembers returns the value of the "carpool_members" field in the mutation.
+func (m *GroupMutation) CarpoolMembers() (r int, exists bool) {
+	v := m.carpool_members
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCarpoolMembers returns the old "carpool_members" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldCarpoolMembers(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCarpoolMembers is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCarpoolMembers requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCarpoolMembers: %w", err)
+	}
+	return oldValue.CarpoolMembers, nil
+}
+
+// AddCarpoolMembers adds i to the "carpool_members" field.
+func (m *GroupMutation) AddCarpoolMembers(i int) {
+	if m.addcarpool_members != nil {
+		*m.addcarpool_members += i
+	} else {
+		m.addcarpool_members = &i
+	}
+}
+
+// AddedCarpoolMembers returns the value that was added to the "carpool_members" field in this mutation.
+func (m *GroupMutation) AddedCarpoolMembers() (r int, exists bool) {
+	v := m.addcarpool_members
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetCarpoolMembers resets all changes to the "carpool_members" field.
+func (m *GroupMutation) ResetCarpoolMembers() {
+	m.carpool_members = nil
+	m.addcarpool_members = nil
+}
+
+// SetCarpoolQuotaSyncedAt sets the "carpool_quota_synced_at" field.
+func (m *GroupMutation) SetCarpoolQuotaSyncedAt(t time.Time) {
+	m.carpool_quota_synced_at = &t
+}
+
+// CarpoolQuotaSyncedAt returns the value of the "carpool_quota_synced_at" field in the mutation.
+func (m *GroupMutation) CarpoolQuotaSyncedAt() (r time.Time, exists bool) {
+	v := m.carpool_quota_synced_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCarpoolQuotaSyncedAt returns the old "carpool_quota_synced_at" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldCarpoolQuotaSyncedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCarpoolQuotaSyncedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCarpoolQuotaSyncedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCarpoolQuotaSyncedAt: %w", err)
+	}
+	return oldValue.CarpoolQuotaSyncedAt, nil
+}
+
+// ClearCarpoolQuotaSyncedAt clears the value of the "carpool_quota_synced_at" field.
+func (m *GroupMutation) ClearCarpoolQuotaSyncedAt() {
+	m.carpool_quota_synced_at = nil
+	m.clearedFields[group.FieldCarpoolQuotaSyncedAt] = struct{}{}
+}
+
+// CarpoolQuotaSyncedAtCleared returns if the "carpool_quota_synced_at" field was cleared in this mutation.
+func (m *GroupMutation) CarpoolQuotaSyncedAtCleared() bool {
+	_, ok := m.clearedFields[group.FieldCarpoolQuotaSyncedAt]
+	return ok
+}
+
+// ResetCarpoolQuotaSyncedAt resets all changes to the "carpool_quota_synced_at" field.
+func (m *GroupMutation) ResetCarpoolQuotaSyncedAt() {
+	m.carpool_quota_synced_at = nil
+	delete(m.clearedFields, group.FieldCarpoolQuotaSyncedAt)
 }
 
 // SetDailyLimitUsd sets the "daily_limit_usd" field.
@@ -25921,7 +26029,7 @@ func (m *GroupMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *GroupMutation) Fields() []string {
-	fields := make([]string, 0, 66)
+	fields := make([]string, 0, 68)
 	if m.created_at != nil {
 		fields = append(fields, group.FieldCreatedAt)
 	}
@@ -25966,6 +26074,12 @@ func (m *GroupMutation) Fields() []string {
 	}
 	if m.subscription_type != nil {
 		fields = append(fields, group.FieldSubscriptionType)
+	}
+	if m.carpool_members != nil {
+		fields = append(fields, group.FieldCarpoolMembers)
+	}
+	if m.carpool_quota_synced_at != nil {
+		fields = append(fields, group.FieldCarpoolQuotaSyncedAt)
 	}
 	if m.daily_limit_usd != nil {
 		fields = append(fields, group.FieldDailyLimitUsd)
@@ -26158,6 +26272,10 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.Platform()
 	case group.FieldSubscriptionType:
 		return m.SubscriptionType()
+	case group.FieldCarpoolMembers:
+		return m.CarpoolMembers()
+	case group.FieldCarpoolQuotaSyncedAt:
+		return m.CarpoolQuotaSyncedAt()
 	case group.FieldDailyLimitUsd:
 		return m.DailyLimitUsd()
 	case group.FieldWeeklyLimitUsd:
@@ -26299,6 +26417,10 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldPlatform(ctx)
 	case group.FieldSubscriptionType:
 		return m.OldSubscriptionType(ctx)
+	case group.FieldCarpoolMembers:
+		return m.OldCarpoolMembers(ctx)
+	case group.FieldCarpoolQuotaSyncedAt:
+		return m.OldCarpoolQuotaSyncedAt(ctx)
 	case group.FieldDailyLimitUsd:
 		return m.OldDailyLimitUsd(ctx)
 	case group.FieldWeeklyLimitUsd:
@@ -26514,6 +26636,20 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetSubscriptionType(v)
+		return nil
+	case group.FieldCarpoolMembers:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCarpoolMembers(v)
+		return nil
+	case group.FieldCarpoolQuotaSyncedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCarpoolQuotaSyncedAt(v)
 		return nil
 	case group.FieldDailyLimitUsd:
 		v, ok := value.(float64)
@@ -26886,6 +27022,9 @@ func (m *GroupMutation) AddedFields() []string {
 	if m.addpeak_rate_multiplier != nil {
 		fields = append(fields, group.FieldPeakRateMultiplier)
 	}
+	if m.addcarpool_members != nil {
+		fields = append(fields, group.FieldCarpoolMembers)
+	}
 	if m.adddaily_limit_usd != nil {
 		fields = append(fields, group.FieldDailyLimitUsd)
 	}
@@ -26973,6 +27112,8 @@ func (m *GroupMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedRateMultiplier()
 	case group.FieldPeakRateMultiplier:
 		return m.AddedPeakRateMultiplier()
+	case group.FieldCarpoolMembers:
+		return m.AddedCarpoolMembers()
 	case group.FieldDailyLimitUsd:
 		return m.AddedDailyLimitUsd()
 	case group.FieldWeeklyLimitUsd:
@@ -27045,6 +27186,13 @@ func (m *GroupMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddPeakRateMultiplier(v)
+		return nil
+	case group.FieldCarpoolMembers:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddCarpoolMembers(v)
 		return nil
 	case group.FieldDailyLimitUsd:
 		v, ok := value.(float64)
@@ -27238,6 +27386,9 @@ func (m *GroupMutation) ClearedFields() []string {
 	if m.FieldCleared(group.FieldDuplicateOperationID) {
 		fields = append(fields, group.FieldDuplicateOperationID)
 	}
+	if m.FieldCleared(group.FieldCarpoolQuotaSyncedAt) {
+		fields = append(fields, group.FieldCarpoolQuotaSyncedAt)
+	}
 	if m.FieldCleared(group.FieldDailyLimitUsd) {
 		fields = append(fields, group.FieldDailyLimitUsd)
 	}
@@ -27317,6 +27468,9 @@ func (m *GroupMutation) ClearField(name string) error {
 		return nil
 	case group.FieldDuplicateOperationID:
 		m.ClearDuplicateOperationID()
+		return nil
+	case group.FieldCarpoolQuotaSyncedAt:
+		m.ClearCarpoolQuotaSyncedAt()
 		return nil
 	case group.FieldDailyLimitUsd:
 		m.ClearDailyLimitUsd()
@@ -27427,6 +27581,12 @@ func (m *GroupMutation) ResetField(name string) error {
 		return nil
 	case group.FieldSubscriptionType:
 		m.ResetSubscriptionType()
+		return nil
+	case group.FieldCarpoolMembers:
+		m.ResetCarpoolMembers()
+		return nil
+	case group.FieldCarpoolQuotaSyncedAt:
+		m.ResetCarpoolQuotaSyncedAt()
 		return nil
 	case group.FieldDailyLimitUsd:
 		m.ResetDailyLimitUsd()

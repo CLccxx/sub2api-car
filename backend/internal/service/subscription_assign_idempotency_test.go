@@ -137,6 +137,9 @@ func (userSubRepoNoop) ListByUserID(context.Context, int64) ([]UserSubscription,
 func (userSubRepoNoop) ListActiveByUserID(context.Context, int64) ([]UserSubscription, error) {
 	panic("unexpected ListActiveByUserID call")
 }
+func (userSubRepoNoop) ListActiveIDs(context.Context) ([]int64, error) {
+	panic("unexpected ListActiveIDs call")
+}
 func (userSubRepoNoop) ListByGroupID(context.Context, int64, pagination.PaginationParams) ([]UserSubscription, *pagination.PaginationResult, error) {
 	panic("unexpected ListByGroupID call")
 }

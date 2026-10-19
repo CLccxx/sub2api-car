@@ -212,6 +212,19 @@ func (r *userSubscriptionRepository) ListActiveByUserID(ctx context.Context, use
 	return userSubscriptionEntitiesToService(subs), nil
 }
 
+// ListActiveIDs captures the global target set in one query, avoiding offset
+// pagination gaps when subscriptions expire or are created during collection.
+func (r *userSubscriptionRepository) ListActiveIDs(ctx context.Context) ([]int64, error) {
+	return clientFromContext(ctx, r.client).UserSubscription.Query().
+		Where(
+			usersubscription.StatusEQ(service.SubscriptionStatusActive),
+			usersubscription.ExpiresAtGT(time.Now()),
+			usersubscription.DeletedAtIsNil(),
+		).
+		Order(dbent.Asc(usersubscription.FieldID)).
+		IDs(ctx)
+}
+
 func (r *userSubscriptionRepository) ListByGroupID(ctx context.Context, groupID int64, params pagination.PaginationParams) ([]service.UserSubscription, *pagination.PaginationResult, error) {
 	client := clientFromContext(ctx, r.client)
 	q := client.UserSubscription.Query().Where(usersubscription.GroupIDEQ(groupID))

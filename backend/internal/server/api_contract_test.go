@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -20,11 +21,89 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
+	"github.com/Wei-Shaw/sub2api/internal/server/routes"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
+
+func newResetVoteRoutesContractRouter(t *testing.T, userRPM, heavyRPM int) *gin.Engine {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	redisServer := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
+	t.Cleanup(func() { _ = redisClient.Close() })
+	settingRepo := newStubSettingRepo()
+	require.NoError(t, settingRepo.Set(context.Background(), "panel_rate_limit_settings", fmt.Sprintf(
+		`{"enabled":true,"user_rpm":%d,"heavy_rpm":%d,"public_ip_rpm":0,"exempt_admin":false}`, userRPM, heavyRPM)))
+	settingService := service.NewSettingService(settingRepo, &config.Config{})
+	limiter := middleware.NewPanelRateLimiter(redisClient, settingService)
+	router := gin.New()
+	routes.RegisterUserRoutes(router.Group("/api/v1"), &handler.Handlers{Subscription: &handler.SubscriptionHandler{}},
+		func(c *gin.Context) {
+			if c.GetHeader("Authorization") != "Bearer contract-user" {
+				c.AbortWithStatus(http.StatusUnauthorized)
+				return
+			}
+			c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 7})
+			c.Next()
+		}, func(c *gin.Context) { c.Next() }, settingService, limiter)
+	return router
+}
+
+func TestSubscriptionResetVoteRoutesRequireAuthentication(t *testing.T) {
+	router := newResetVoteRoutesContractRouter(t, 100, 10)
+	for _, endpoint := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/v1/subscriptions/12/reset-vote"},
+		{http.MethodPost, "/api/v1/subscriptions/12/reset-vote"},
+		{http.MethodPost, "/api/v1/subscriptions/12/reset-vote/34/agree"},
+	} {
+		t.Run(endpoint.method+endpoint.path, func(t *testing.T) {
+			status, body := doRequest(t, router, endpoint.method, endpoint.path, `{}`, nil)
+			require.Equal(t, http.StatusUnauthorized, status, body)
+		})
+	}
+}
+
+func TestSubscriptionResetVoteRoutesHeavyLimiterOnlyOnPost(t *testing.T) {
+	for _, path := range []string{
+		"/api/v1/subscriptions/0/reset-vote",
+		"/api/v1/subscriptions/0/reset-vote/34/agree",
+	} {
+		t.Run(path, func(t *testing.T) {
+			router := newResetVoteRoutesContractRouter(t, 100, 1)
+			headers := map[string]string{"Authorization": "Bearer contract-user", "Content-Type": "application/json"}
+			// Invalid IDs reach the real handlers without requiring a vote service.
+			status, body := doRequest(t, router, http.MethodPost, path, `{}`, headers)
+			require.Equal(t, http.StatusBadRequest, status, body)
+			require.JSONEq(t, `{"code":400,"message":"Invalid subscription ID"}`, body)
+			status, body = doRequest(t, router, http.MethodPost, path, `{}`, headers)
+			require.Equal(t, http.StatusTooManyRequests, status, body)
+			for range 2 {
+				status, body = doRequest(t, router, http.MethodGet, "/api/v1/subscriptions/0/reset-vote", "", headers)
+				require.Equal(t, http.StatusBadRequest, status, body)
+				require.JSONEq(t, `{"code":400,"message":"Invalid subscription ID"}`, body)
+			}
+		})
+	}
+}
+
+func TestSubscriptionResetVoteRoutesGetRetainsGlobalLimiter(t *testing.T) {
+	router := newResetVoteRoutesContractRouter(t, 2, 100)
+	headers := map[string]string{"Authorization": "Bearer contract-user"}
+	for range 2 {
+		status, body := doRequest(t, router, http.MethodGet, "/api/v1/subscriptions/0/reset-vote", "", headers)
+		require.Equal(t, http.StatusBadRequest, status, body)
+	}
+	status, body := doRequest(t, router, http.MethodGet, "/api/v1/subscriptions/0/reset-vote", "", headers)
+	require.Equal(t, http.StatusTooManyRequests, status, body)
+}
 
 func TestAPIContracts(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -1486,7 +1565,7 @@ func newContractDeps(t *testing.T) *contractDeps {
 	usageService := service.NewUsageService(usageRepo, userRepo, nil, nil)
 
 	subscriptionService := service.NewSubscriptionService(groupRepo, userSubRepo, nil, nil, cfg)
-	subscriptionHandler := handler.NewSubscriptionHandler(subscriptionService)
+	subscriptionHandler := handler.NewSubscriptionHandler(subscriptionService, nil, nil)
 
 	redeemService := service.NewRedeemService(redeemRepo, userRepo, subscriptionService, nil, nil, nil, nil, nil)
 	redeemHandler := handler.NewRedeemHandler(redeemService)
@@ -2274,6 +2353,9 @@ func (r *stubUserSubscriptionRepo) ListActiveByUserID(ctx context.Context, userI
 		return nil, nil
 	}
 	return append([]service.UserSubscription(nil), r.activeByUser[userID]...), nil
+}
+func (stubUserSubscriptionRepo) ListActiveIDs(context.Context) ([]int64, error) {
+	return nil, errors.New("not implemented")
 }
 func (stubUserSubscriptionRepo) ListByGroupID(ctx context.Context, groupID int64, params pagination.PaginationParams) ([]service.UserSubscription, *pagination.PaginationResult, error) {
 	return nil, nil, errors.New("not implemented")

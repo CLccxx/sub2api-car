@@ -673,6 +673,36 @@ export default {
 
     // Subscriptions
     subscriptions: {
+      resetAll: {
+        button: 'Reset All Subscription Quotas',
+        title: 'Reset All Active Subscription Quotas',
+        scope: 'Scope: every active subscription across all pages, regardless of search, group, or platform filters. Expired and revoked subscriptions are excluded from the target list.',
+        loading: 'Loading all active subscriptions...',
+        confirmTargets: 'Reset quotas for {count} active subscriptions',
+        warning: 'Daily, weekly, and monthly usage will be zeroed and usage windows reset under the existing rules. Limits, expiration dates, and request history will not change. This action cannot be undone.',
+        empty: 'There are no active subscriptions to reset.',
+        confirm: 'Confirm Global Reset',
+        progress: 'Processed {done} of {total} subscriptions',
+        completed: 'Completed: {done} of {total} subscriptions',
+        success: 'Succeeded',
+        failed: 'Failed',
+        skipped: 'Inactive / skipped',
+        replayExpired: 'This batch is past its safe retry deadline. Check the actual usage of these subscriptions before ending this operation. Do not immediately start another global reset.',
+        endOperation: 'End This Operation',
+        uncertainTargets: 'Subscription IDs to verify',
+        failures: 'Subscriptions that failed to reset',
+        resume: 'Resume This Reset',
+        retryFailed: 'Retry Failed ({count})',
+        resumed: 'The saved operation has been restored. Resuming will process only the remaining subscriptions.',
+        interrupted: 'The operation is paused. Completed subscriptions will not be repeated. Batches with an unknown outcome will be retried with the original request.',
+        recoveryUnavailable: 'Recovery progress cannot be saved. Do not refresh or close this page.',
+        reload: 'Reload Target List',
+        loadFailed: 'Could not load subscriptions. No quotas have been reset.',
+        requestFailed: 'The reset request failed. The operation is paused.',
+        invalidResponse: 'The server returned an incomplete batch result. The operation is paused.',
+        invalidCheckpoint: 'The saved reset progress cannot be read. The operation has been stopped to avoid repeating resets.',
+        adminChanged: 'The administrator has changed. Sign in as the original administrator to resume.'
+      },
       batchAssign: {
         enable: 'Assign to multiple users',
         hint: 'Search and add up to 100 users to assign the same group and validity period.',

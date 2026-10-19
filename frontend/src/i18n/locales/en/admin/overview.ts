@@ -1067,6 +1067,13 @@ export default {
         validityHint: 'Number of days the subscription is valid when assigned to a user',
         noLimit: 'No limit'
       },
+      carpool: {
+        enabled: 'Shared account quota',
+        members: 'Members sharing the account',
+        schedule: 'Quota update schedule',
+        scheduleValue: '00 / 06 / 12 / 18 (Asia/Shanghai)',
+        lastUpdated: 'Last synchronized'
+      },
       imagePricing: {
         title: 'Image Generation Pricing',
         description: 'Configure image generation access and base image prices. Leave empty to use default prices.',

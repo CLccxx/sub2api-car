@@ -101,6 +101,7 @@
             </div>
 
             <!-- Daily Usage -->
+            <h4 class="text-sm font-semibold text-gray-900 dark:text-gray-100">{{ t('userSubscriptions.personalQuota') }}</h4>
             <div v-if="subscription.group?.daily_limit_usd" class="space-y-2">
               <div class="flex items-center justify-between">
                 <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -241,6 +242,13 @@
               </div>
             </div>
           </div>
+          <SharedAccountUsage
+            v-if="subscription.status === 'active' && subscription.group?.platform === 'openai' && (!subscription.expires_at || Date.parse(subscription.expires_at) > Date.now())"
+            :subscription-id="subscription.id"
+            :expires-at="subscription.expires_at"
+            :refresh-key="sharedRefreshKey"
+            @reset-completed="onResetCompleted"
+          />
         </div>
       </div>
     </div>
@@ -248,7 +256,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
@@ -256,6 +264,7 @@ import subscriptionsAPI from '@/api/subscriptions'
 import type { UserSubscription } from '@/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
+import SharedAccountUsage from '@/components/subscription/SharedAccountUsage.vue'
 import { formatDateTimeToMinute } from '@/utils/format'
 import { hasPeakRate, formatPeakRateWindow, serverTimezoneLabel } from '@/utils/peak-rate'
 import { platformBorderClass, platformBadgeClass, platformButtonClass, platformLabel } from '@/utils/platformColors'
@@ -282,6 +291,50 @@ const appStore = useAppStore()
 
 const subscriptions = ref<UserSubscription[]>([])
 const loading = ref(true)
+const sharedRefreshKey = ref(0)
+const completedResetProposals = new Set<number>()
+const pendingResetProposals = new Set<number>()
+const initialRetryDelay = 1000
+const maxRetryDelay = 30_000
+let retryDelay = initialRetryDelay
+let retryTimer: ReturnType<typeof setTimeout> | undefined
+let completionRefreshInFlight = false
+let completionRefreshErrorShown = false
+let subscriptionController: AbortController | null = null
+let loadGeneration = 0
+let disposed = false
+
+function onResetCompleted(proposalId: number) {
+  if (disposed || completedResetProposals.has(proposalId) || pendingResetProposals.has(proposalId)) return
+  pendingResetProposals.add(proposalId)
+  sharedRefreshKey.value++
+  if (!completionRefreshInFlight && retryTimer === undefined) void refreshCompletedSubscriptions()
+}
+
+async function refreshCompletedSubscriptions() {
+  if (disposed || completionRefreshInFlight || pendingResetProposals.size === 0) return
+  completionRefreshInFlight = true
+  // Completions arriving during this read need their own later snapshot.
+  const proposals = [...pendingResetProposals]
+  const refreshed = await loadSubscriptions(true)
+  completionRefreshInFlight = false
+  if (disposed) return
+  if (refreshed) {
+    for (const id of proposals) {
+      pendingResetProposals.delete(id)
+      completedResetProposals.add(id)
+    }
+    retryDelay = initialRetryDelay
+    completionRefreshErrorShown = false
+  }
+  if (pendingResetProposals.size > 0) {
+    retryTimer = setTimeout(() => {
+      retryTimer = undefined
+      void refreshCompletedSubscriptions()
+    }, refreshed ? 0 : retryDelay)
+    if (!refreshed) retryDelay = Math.min(retryDelay * 2, maxRetryDelay)
+  }
+}
 
 function subscriptionHasPeakRate(subscription: UserSubscription): boolean {
   return hasPeakRate(subscription.group)
@@ -291,15 +344,26 @@ function subscriptionPeakRateLabel(subscription: UserSubscription): string {
   return formatPeakRateWindow(subscription.group, serverTimezoneLabel(appStore.cachedPublicSettings?.server_utc_offset))
 }
 
-async function loadSubscriptions() {
+async function loadSubscriptions(background = false): Promise<boolean> {
+  if (disposed) return false
+  subscriptionController?.abort()
+  subscriptionController = new AbortController()
+  const signal = subscriptionController.signal
+  const request = ++loadGeneration
   try {
-    loading.value = true
-    subscriptions.value = await subscriptionsAPI.getMySubscriptions()
-  } catch (error) {
-    console.error('Failed to load subscriptions:', error)
-    appStore.showError(t('userSubscriptions.failedToLoad'))
+    if (!background) loading.value = true
+    const result = await subscriptionsAPI.getMySubscriptions({ signal })
+    if (request !== loadGeneration || signal.aborted || disposed) return false
+    subscriptions.value = result
+    return true
+  } catch {
+    if (request === loadGeneration && !signal.aborted && !disposed && (!background || !completionRefreshErrorShown)) {
+      appStore.showError(t('userSubscriptions.failedToLoad'))
+      if (background) completionRefreshErrorShown = true
+    }
+    return false
   } finally {
-    loading.value = false
+    if (request === loadGeneration) loading.value = false
   }
 }
 
@@ -390,5 +454,11 @@ function formatResetTime(windowStart: string | null, windowHours: number): strin
 
 onMounted(() => {
   loadSubscriptions()
+})
+onBeforeUnmount(() => {
+  disposed = true
+  loadGeneration++
+  clearTimeout(retryTimer)
+  subscriptionController?.abort()
 })
 </script>

@@ -118,6 +118,9 @@ func provideCleanup(
 	grokOAuth *service.GrokOAuthService,
 	openAIGateway *service.OpenAIGatewayService,
 	scheduledTestRunner *service.ScheduledTestRunnerService,
+	carpoolQuota *service.CarpoolQuotaService,
+	carpoolResetMonitor *service.CarpoolResetMonitorService,
+	carpoolResetVote *service.CarpoolResetVoteService,
 	backupSvc *service.BackupService,
 	paymentOrderExpiry *service.PaymentOrderExpiryService,
 	channelMonitorRunner *service.ChannelMonitorRunner,
@@ -142,6 +145,24 @@ func provideCleanup(
 
 		// 应用层清理步骤可并行执行，基础设施资源（Redis/Ent）最后按顺序关闭。
 		parallelSteps := []cleanupStep{
+			{"CarpoolQuotaService", func() error {
+				if carpoolQuota != nil {
+					carpoolQuota.Stop()
+				}
+				return nil
+			}},
+			{"CarpoolResetMonitorService", func() error {
+				if carpoolResetMonitor != nil {
+					carpoolResetMonitor.Stop()
+				}
+				return nil
+			}},
+			{"CarpoolResetVoteService", func() error {
+				if carpoolResetVote != nil {
+					carpoolResetVote.Stop()
+				}
+				return nil
+			}},
 			{"PluginManager", func() error {
 				if pluginManager != nil {
 					pluginManager.Stop()

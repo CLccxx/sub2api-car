@@ -133,6 +133,10 @@ func RegisterUserRoutes(
 			subscriptions.GET("/active", h.Subscription.GetActive)
 			subscriptions.GET("/progress", h.Subscription.GetProgress)
 			subscriptions.GET("/summary", h.Subscription.GetSummary)
+			subscriptions.GET("/:id/shared-usage", panelRateLimiter.Heavy(), h.Subscription.GetSharedUsage)
+			subscriptions.GET("/:id/reset-vote", h.Subscription.GetResetVote)
+			subscriptions.POST("/:id/reset-vote", panelRateLimiter.Heavy(), h.Subscription.CreateResetVote)
+			subscriptions.POST("/:id/reset-vote/:proposal/agree", panelRateLimiter.Heavy(), h.Subscription.AgreeResetVote)
 		}
 
 		// 渠道监控（用户只读）
