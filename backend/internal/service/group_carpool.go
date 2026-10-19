@@ -30,11 +30,12 @@ func applyCarpoolSettings(group *Group, previousLimit *float64) error {
 }
 
 func carpoolWeeklyLimit(estimate float64, members int) (float64, bool) {
-	const stepUSD = 10
-	if !validCarpoolMembers(members) || math.IsNaN(estimate) || math.IsInf(estimate, 0) || estimate < stepUSD || estimate > 1e10 {
+	const minimumEstimateUSD = 10
+	const stepUSD = 50
+	if !validCarpoolMembers(members) || math.IsNaN(estimate) || math.IsInf(estimate, 0) || estimate < minimumEstimateUSD || estimate > 1e10 {
 		return 0, false
 	}
-	totalCents := math.Floor(estimate/stepUSD) * stepUSD * 100
+	totalCents := math.Ceil(estimate/stepUSD) * stepUSD * 100
 	limit := math.Floor(totalCents/float64(members)) / 100
 	return limit, limit > 0
 }
