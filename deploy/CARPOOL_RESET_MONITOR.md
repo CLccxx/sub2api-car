@@ -57,7 +57,7 @@ all three quota windows manually:
   timezone; set weekly and monthly windows to the execution time.
 - Preserve limits, expiry, status, balances and historical usage logs.
 
-The two-hour carpool weekly-limit adjustment remains independent of usage resets.
+The carpool weekly-limit adjustment runs every 30 minutes, independently of usage resets.
 
 ## Recovery And Concurrency
 

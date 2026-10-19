@@ -38,10 +38,12 @@ func TestCarpoolScheduleShanghai(t *testing.T) {
 	loc, err := time.LoadLocation("Asia/Shanghai")
 	require.NoError(t, err)
 	now := time.Date(2026, 10, 8, 23, 59, 0, 0, loc)
-	for _, hour := range []int{0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22} {
-		next := schedule.Next(now.UTC()).In(loc)
-		require.Equal(t, time.Date(2026, 10, 9, hour, 0, 0, 0, loc), next)
-		now = next
+	for hour := 0; hour < 24; hour++ {
+		for _, minute := range []int{0, 30} {
+			next := schedule.Next(now.UTC()).In(loc)
+			require.Equal(t, time.Date(2026, 10, 9, hour, minute, 0, 0, loc), next)
+			now = next
+		}
 	}
 	require.Equal(t, time.Date(2026, 10, 10, 0, 0, 0, 0, loc), schedule.Next(now.UTC()).In(loc))
 }
@@ -67,14 +69,15 @@ func (r *carpoolRepoStub) Apply(_ context.Context, _ CarpoolQuotaTarget, _ *Acco
 	return r.applied, r.err
 }
 
-func TestCarpoolQuotaRunTwoHourSlots(t *testing.T) {
+func TestCarpoolQuotaRunHalfHourSlots(t *testing.T) {
 	loc, err := time.LoadLocation("Asia/Shanghai")
 	require.NoError(t, err)
 	for _, test := range []struct {
-		hour     int
-		slotHour int
-	}{{0, 0}, {1, 0}, {2, 2}, {3, 2}, {4, 4}, {5, 4}, {22, 22}, {23, 22}} {
-		observed := time.Date(2026, 10, 9, test.hour, 59, 0, 0, loc)
+		hour       int
+		minute     int
+		slotMinute int
+	}{{0, 0, 0}, {0, 29, 0}, {0, 30, 30}, {0, 59, 30}, {1, 0, 0}, {1, 29, 0}, {1, 30, 30}, {1, 59, 30}, {23, 29, 0}, {23, 30, 30}, {23, 59, 30}} {
+		observed := time.Date(2026, 10, 9, test.hour, test.minute, 0, 0, loc)
 		t.Run(observed.Format("15:04"), func(t *testing.T) {
 			_, _, accounts, quota, _, now := sharedUsageFixture(t)
 			*now = observed.UTC()
@@ -86,7 +89,7 @@ func TestCarpoolQuotaRunTwoHourSlots(t *testing.T) {
 
 			svc.run(context.Background())
 
-			wantSlot := time.Date(2026, 10, 9, test.slotHour, 0, 0, 0, loc)
+			wantSlot := time.Date(2026, 10, 9, test.hour, test.slotMinute, 0, 0, loc)
 			require.Equal(t, wantSlot, repo.listedSlot)
 			require.Equal(t, 1, repo.writes)
 			require.Equal(t, wantSlot, repo.appliedSlot)

@@ -11,7 +11,7 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-const carpoolQuotaSchedule = "CRON_TZ=Asia/Shanghai 0 */2 * * *"
+const carpoolQuotaSchedule = "CRON_TZ=Asia/Shanghai */30 * * * *"
 
 type CarpoolQuotaTarget struct {
 	GroupID  int64
@@ -75,7 +75,7 @@ func (s *CarpoolQuotaService) run(parent context.Context) {
 		return
 	}
 	now := s.now().In(loc)
-	slot := time.Date(now.Year(), now.Month(), now.Day(), now.Hour()/2*2, 0, 0, 0, loc)
+	slot := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute()/30*30, 0, 0, loc)
 	targets, err := s.repo.ListPending(ctx, slot)
 	if err != nil {
 		logger.LegacyPrintf("service.carpool_quota", "list pending failed: %v", err)
