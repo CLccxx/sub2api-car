@@ -19,8 +19,10 @@ func TestCarpoolWeeklyLimit(t *testing.T) {
 		expected float64
 		ok       bool
 	}{
-		{1374.65, 4, 325, true}, {1374.65, 3, 433.33, true}, {1600, 5, 320, true},
-		{1399.99, 4, 325, true}, {1400, 4, 350, true}, {99.99, 4, 0, false},
+		{1374.65, 4, 342.5, true}, {1374.65, 3, 456.66, true}, {1600, 5, 320, true},
+		{1399.99, 4, 347.5, true}, {1400, 4, 350, true}, {150, 4, 37.5, true},
+		{99.99, 4, 22.5, true}, {100, 4, 25, true}, {9.99, 4, 0, false},
+		{10, 4, 2.5, true}, {19.99, 4, 2.5, true}, {20, 4, 5, true},
 		{0, 4, 0, false}, {-100, 4, 0, false}, {math.NaN(), 4, 0, false},
 		{math.Inf(1), 4, 0, false}, {1000, 0, 0, false}, {1000, 6, 0, false},
 	} {
@@ -118,7 +120,7 @@ func TestCarpoolQuotaRefresh(t *testing.T) {
 			svc.run(context.Background())
 			if scenario == "success" || scenario == "conflict" {
 				require.Equal(t, 1, repo.writes)
-				require.Equal(t, 325.0, repo.limit)
+				require.Equal(t, 342.5, repo.limit)
 			} else {
 				require.Zero(t, repo.writes)
 			}
@@ -129,4 +131,20 @@ func TestCarpoolQuotaRefresh(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCarpoolQuotaRefreshTenDollarRoundingPreservesAvailableQuota(t *testing.T) {
+	_, _, accounts, quota, _, now := sharedUsageFixture(t)
+	quota.payload.RateLimit.SecondaryWindow.UsedPercent = 80
+	stats := &carpoolStats{cost: 120}
+	repo := &carpoolRepoStub{targets: []CarpoolQuotaTarget{{GroupID: 10, Members: 4, Revision: *now}}, applied: true}
+	svc := NewCarpoolQuotaService(repo, accounts, quota, stats, nil)
+	svc.now = func() time.Time { return *now }
+
+	svc.run(context.Background())
+
+	require.Equal(t, 1, repo.writes)
+	require.Equal(t, 37.5, repo.limit)
+	sub := &UserSubscription{WeeklyUsageUSD: 30}
+	require.True(t, sub.CheckWeeklyLimit(&Group{WeeklyLimitUSD: &repo.limit}, 0))
 }
