@@ -15,7 +15,7 @@ func TestCarpoolRepositoryApply(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			db, mock, err := sqlmock.New()
 			require.NoError(t, err)
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 			repo := NewCarpoolQuotaRepository(db)
 			slot := time.Date(2026, 10, 8, 4, 0, 0, 0, time.UTC)
 			target := service.CarpoolQuotaTarget{GroupID: 10, Members: 4, Revision: slot.Add(-time.Hour)}

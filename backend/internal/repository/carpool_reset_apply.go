@@ -17,7 +17,7 @@ func (r *carpoolResetMonitorRepository) ApplyEvent(ctx context.Context, eventID 
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	// Match voting's table-before-monitor order. Without this reservation a
 	// status poll can hold SHARE while waiting for the monitor we already own.
 	if _, err = tx.ExecContext(ctx, `LOCK TABLE user_subscriptions IN ROW EXCLUSIVE MODE NOWAIT`); err != nil {
@@ -121,7 +121,7 @@ func (r *carpoolResetMonitorRepository) PendingInvalidations(ctx context.Context
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var result []service.CarpoolResetInvalidation
 	for rows.Next() {
 		var item service.CarpoolResetInvalidation

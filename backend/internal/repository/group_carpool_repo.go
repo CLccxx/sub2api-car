@@ -26,7 +26,7 @@ func (r *carpoolQuotaRepository) ListPending(ctx context.Context, slot time.Time
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var targets []service.CarpoolQuotaTarget
 	for rows.Next() {
 		var target service.CarpoolQuotaTarget
@@ -50,7 +50,7 @@ func (r *carpoolQuotaRepository) Apply(ctx context.Context, target service.Carpo
 	if err != nil {
 		return false, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	// Group inserts/binding changes use the same live-group lock protocol.
 	var id int64
 	err = tx.QueryRowContext(ctx, `SELECT id FROM groups WHERE id = $1
@@ -80,14 +80,14 @@ func (r *carpoolQuotaRepository) Apply(ctx context.Context, target service.Carpo
 		var accountID int64
 		var eligible bool
 		if err := rows.Scan(&accountID, &eligible); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return false, err
 		}
 		count++
 		matches = accountID == account.ID && eligible
 	}
 	err = rows.Err()
-	rows.Close()
+	_ = rows.Close()
 	if err != nil {
 		return false, err
 	}

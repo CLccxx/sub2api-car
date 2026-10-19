@@ -37,13 +37,13 @@ func carpoolResetSource(ctx context.Context, exec carpoolResetQuerier) (*service
 	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, err
 		}
 		groupIDs = append(groupIDs, id)
 	}
 	err = rows.Err()
-	rows.Close()
+	_ = rows.Close()
 	if err != nil || len(groupIDs) != 1 {
 		return nil, err
 	}
@@ -56,7 +56,7 @@ func carpoolResetSource(ctx context.Context, exec carpoolResetQuerier) (*service
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	count := 0
 	var source *service.CarpoolResetSource
 	for rows.Next() {
@@ -79,7 +79,7 @@ func carpoolResetSource(ctx context.Context, exec carpoolResetQuerier) (*service
 	if count != 1 || source == nil {
 		return nil, nil
 	}
-	rows.Close()
+	_ = rows.Close()
 	// Count committed append-only changes, not max(id): sequence allocation can
 	// precede another transaction's commit and otherwise hide a late change.
 	if err := exec.QueryRowContext(ctx, `SELECT count(*) FROM carpool_reset_source_changes`).Scan(&source.Revision); err != nil {
@@ -116,7 +116,7 @@ func (r *carpoolResetMonitorRepository) ClearBaseline(ctx context.Context) error
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if _, err = tx.ExecContext(ctx, `INSERT INTO carpool_reset_monitor(id) VALUES(1) ON CONFLICT DO NOTHING`); err != nil {
 		return err
 	}
@@ -144,7 +144,7 @@ func (r *carpoolResetMonitorRepository) Observe(ctx context.Context, source serv
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if _, err = tx.ExecContext(ctx, `INSERT INTO carpool_reset_monitor(id) VALUES(1) ON CONFLICT DO NOTHING`); err != nil {
 		return nil, err
 	}
@@ -241,7 +241,7 @@ func (r *carpoolResetMonitorRepository) RecordResetReceipt(ctx context.Context, 
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if _, err = tx.ExecContext(ctx, `INSERT INTO carpool_reset_monitor(id) VALUES(1) ON CONFLICT DO NOTHING`); err != nil {
 		return err
 	}
@@ -267,7 +267,7 @@ func (r *carpoolResetMonitorRepository) PendingEvents(ctx context.Context) ([]in
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var ids []int64
 	for rows.Next() {
 		var id int64

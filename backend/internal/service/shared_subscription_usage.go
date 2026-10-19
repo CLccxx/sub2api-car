@@ -103,7 +103,10 @@ func (s *SharedSubscriptionUsageService) Get(ctx context.Context, userID, subscr
 			if result.Err != nil {
 				return nil, result.Err
 			}
-			entry = result.Val.(sharedUsageCacheEntry)
+			entry, ok = result.Val.(sharedUsageCacheEntry)
+			if !ok {
+				return nil, infraerrors.New(503, "SHARED_USAGE_UNAVAILABLE", "Shared account usage is temporarily unavailable")
+			}
 		}
 	}
 	// Membership or the sole binding may have changed during the upstream read.

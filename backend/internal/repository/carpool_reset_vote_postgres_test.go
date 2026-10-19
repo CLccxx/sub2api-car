@@ -359,7 +359,7 @@ func TestCarpoolVotePostgresApplyAndPollLockOrder(t *testing.T) {
 	ctx := context.Background()
 	blocker, err := pool.Begin()
 	require.NoError(t, err)
-	defer blocker.Rollback()
+	defer func() { _ = blocker.Rollback() }()
 	_, err = blocker.Exec(`SELECT id FROM carpool_reset_monitor WHERE id=1 FOR UPDATE`)
 	require.NoError(t, err)
 	result := make(chan error, 1)

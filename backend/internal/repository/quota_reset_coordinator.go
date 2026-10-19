@@ -58,7 +58,7 @@ func reconcileConfirmedQuotaResetOperations(ctx context.Context, db *sql.DB) err
 		var candidate target
 		var requestHash string
 		if err := rows.Scan(&candidate.accountID, &candidate.requestID, &requestHash); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return quotaResetStorageError()
 		}
 		if requestHash == service.CarpoolResetIdentityHash(candidate.requestID) {
@@ -66,7 +66,7 @@ func reconcileConfirmedQuotaResetOperations(ctx context.Context, db *sql.DB) err
 		}
 	}
 	err = rows.Err()
-	rows.Close()
+	_ = rows.Close()
 	if err != nil {
 		return quotaResetStorageError()
 	}
@@ -83,7 +83,7 @@ func reconcileConfirmedQuotaResetOperation(ctx context.Context, db *sql.DB, acco
 	if err != nil {
 		return quotaResetStorageError()
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var acquired bool
 	if err := tx.QueryRowContext(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended($1::text,824602))`, strconv.FormatInt(accountID, 10)).Scan(&acquired); err != nil {
 		return quotaResetStorageError()

@@ -22,7 +22,7 @@ func (r *carpoolResetVoteRepository) Pending(ctx context.Context) ([]int64, erro
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var ids []int64
 	for rows.Next() {
 		var id int64
@@ -41,7 +41,7 @@ func (r *carpoolResetVoteRepository) Load(ctx context.Context, id int64) (*servi
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	p, err := scanVote(tx.QueryRowContext(ctx, `SELECT `+voteColumns+` FROM carpool_reset_votes WHERE id=$1 FOR UPDATE`, id))
 	if err != nil || p == nil {
 		return p, err
@@ -70,7 +70,7 @@ func (r *carpoolResetVoteRepository) prepareOrDispatch(ctx context.Context, id i
 	if err != nil {
 		return false, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	p, err := scanVote(tx.QueryRowContext(ctx, `SELECT `+voteColumns+` FROM carpool_reset_votes WHERE id=$1 FOR UPDATE`, id))
 	if err != nil || p == nil {
 		return false, err
@@ -159,7 +159,7 @@ func (r *carpoolResetVoteRepository) Succeed(ctx context.Context, id int64, resu
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	p, err := scanVote(tx.QueryRowContext(ctx, `SELECT `+voteColumns+` FROM carpool_reset_votes WHERE id=$1 FOR UPDATE`, id))
 	if err != nil {
 		return 0, err

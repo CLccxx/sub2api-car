@@ -79,13 +79,13 @@ func voteEligibility(ctx context.Context, q carpoolResetQuerier, group int64) (*
 	for rows.Next() {
 		var m service.CarpoolVoteMember
 		if err := rows.Scan(&m.UserID, &m.SubscriptionID, &m.StartsAt); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, err
 		}
 		e.Members = append(e.Members, m)
 	}
 	err = rows.Err()
-	rows.Close()
+	_ = rows.Close()
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +128,7 @@ func (r *carpoolResetVoteRepository) Eligibility(ctx context.Context, user, subs
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	group, err := voteOwnerGroup(ctx, tx, user, subscription)
 	if err != nil {
 		return nil, err
@@ -265,7 +265,7 @@ func (r *carpoolResetVoteRepository) mutate(ctx context.Context, user, subscript
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	group, err := voteOwnerGroup(ctx, tx, user, subscription)
 	if err != nil {
 		return nil, err
