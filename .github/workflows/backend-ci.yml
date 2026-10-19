@@ -8,6 +8,19 @@ permissions:
   contents: read
 
 jobs:
+  car-update-tools:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.12']
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Test custom release packaging and upgrade failure recovery
+        run: python -B -m unittest discover -s deploy/tests -p 'test_*car.py'
+
   shell:
     runs-on: macos-15
     steps:

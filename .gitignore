@@ -86,6 +86,8 @@ temp/
 *.log
 *.bak
 .cache/
+__pycache__/
+*.py[cod]
 .dev/
 .serena/
 
