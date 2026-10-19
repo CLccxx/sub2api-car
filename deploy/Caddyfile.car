@@ -1,0 +1,6 @@
+{$SUB2API_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy sub2api:8080 {
+		flush_interval -1
+	}
+}
