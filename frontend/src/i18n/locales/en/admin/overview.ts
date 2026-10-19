@@ -1077,7 +1077,7 @@ export default {
         enabled: 'Shared account quota',
         members: 'Members sharing the account',
         schedule: 'Quota update schedule',
-        scheduleValue: '00 / 06 / 12 / 18 (Asia/Shanghai)',
+        scheduleValue: 'Every 2 hours: 00 / 02 / 04 / … / 22 (Asia/Shanghai)',
         lastUpdated: 'Last synchronized'
       },
       imagePricing: {

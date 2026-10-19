@@ -38,28 +38,60 @@ func TestCarpoolScheduleShanghai(t *testing.T) {
 	loc, err := time.LoadLocation("Asia/Shanghai")
 	require.NoError(t, err)
 	now := time.Date(2026, 10, 8, 23, 59, 0, 0, loc)
-	for _, hour := range []int{0, 6, 12, 18} {
+	for _, hour := range []int{0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22} {
 		next := schedule.Next(now.UTC()).In(loc)
 		require.Equal(t, time.Date(2026, 10, 9, hour, 0, 0, 0, loc), next)
 		now = next
 	}
+	require.Equal(t, time.Date(2026, 10, 10, 0, 0, 0, 0, loc), schedule.Next(now.UTC()).In(loc))
 }
 
 type carpoolRepoStub struct {
-	targets []CarpoolQuotaTarget
-	err     error
-	applied bool
-	writes  int
-	limit   float64
+	targets     []CarpoolQuotaTarget
+	err         error
+	applied     bool
+	writes      int
+	limit       float64
+	listedSlot  time.Time
+	appliedSlot time.Time
 }
 
-func (r *carpoolRepoStub) ListPending(context.Context, time.Time) ([]CarpoolQuotaTarget, error) {
+func (r *carpoolRepoStub) ListPending(_ context.Context, slot time.Time) ([]CarpoolQuotaTarget, error) {
+	r.listedSlot = slot
 	return r.targets, r.err
 }
-func (r *carpoolRepoStub) Apply(_ context.Context, _ CarpoolQuotaTarget, _ *Account, limit float64, _ time.Time) (bool, error) {
+func (r *carpoolRepoStub) Apply(_ context.Context, _ CarpoolQuotaTarget, _ *Account, limit float64, slot time.Time) (bool, error) {
 	r.writes++
 	r.limit = limit
+	r.appliedSlot = slot
 	return r.applied, r.err
+}
+
+func TestCarpoolQuotaRunTwoHourSlots(t *testing.T) {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	require.NoError(t, err)
+	for _, test := range []struct {
+		hour     int
+		slotHour int
+	}{{0, 0}, {1, 0}, {2, 2}, {3, 2}, {4, 4}, {5, 4}, {22, 22}, {23, 22}} {
+		observed := time.Date(2026, 10, 9, test.hour, 59, 0, 0, loc)
+		t.Run(observed.Format("15:04"), func(t *testing.T) {
+			_, _, accounts, quota, _, now := sharedUsageFixture(t)
+			*now = observed.UTC()
+			quota.payload.FetchedAt = now.Unix()
+			quota.payload.RateLimit.SecondaryWindow.ResetAt = now.Add(48 * time.Hour).Unix()
+			repo := &carpoolRepoStub{targets: []CarpoolQuotaTarget{{GroupID: 10, Members: 4, Revision: *now}}, applied: true}
+			svc := NewCarpoolQuotaService(repo, accounts, quota, &carpoolStats{cost: 120}, nil)
+			svc.now = func() time.Time { return *now }
+
+			svc.run(context.Background())
+
+			wantSlot := time.Date(2026, 10, 9, test.slotHour, 0, 0, 0, loc)
+			require.Equal(t, wantSlot, repo.listedSlot)
+			require.Equal(t, 1, repo.writes)
+			require.Equal(t, wantSlot, repo.appliedSlot)
+		})
+	}
 }
 
 type carpoolStats struct {

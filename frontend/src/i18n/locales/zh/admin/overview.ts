@@ -1074,7 +1074,7 @@ export default {
         enabled: '拼车额度',
         members: '拼车人数',
         schedule: '额度更新时间',
-        scheduleValue: '北京时间 00 / 06 / 12 / 18 点',
+        scheduleValue: '北京时间每 2 小时（00 / 02 / 04 / … / 22 点）',
         lastUpdated: '最近同步'
       },
       imagePricing: {
