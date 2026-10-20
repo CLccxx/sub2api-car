@@ -56,6 +56,15 @@ class HostCommands(FakeDocker):
         self.loaded_unit = ""
         self.expected_unit = None
         self.drop_ins = ""
+        self.kill_signal = "15"
+        self.send_sighup = "no"
+        self.exec_stop = ""
+        self.exec_stop_post = ""
+        self.runtime_directory = ""
+        self.runtime_preserve = "no"
+        self.enable_state_override = None
+        self.enable_changes_state = True
+        self.absent_enablement_empty = False
 
     def __call__(self, args, **kwargs):
         args = list(args)
@@ -66,19 +75,33 @@ class HostCommands(FakeDocker):
             if "is-active" in args:
                 code = 0 if self.active else 3
             elif "is-enabled" in args:
-                code = 0 if self.enabled else 1
+                state = self.enable_state_override if self.enable_state_override is not None else ("enabled" if self.enabled else
+                        "disabled" if self.expected_unit.exists() else "not-found")
+                # systemctl returns success for static/indirect/runtime units;
+                # that exit code alone does not prove persistent boot enablement.
+                code = 0 if state in {"enabled", "enabled-runtime", "static", "indirect", "alias"} else 4 if state == "not-found" else 1
+                output = b"" if "--quiet" in args else (state + "\n").encode()
+                if state == "not-found" and self.absent_enablement_empty:
+                    # systemd 249 reports an absent unit on stderr only.
+                    code, output = 1, b""
             elif "stop" in args:
                 self.active = False
             elif "start" in args:
                 self.active = not self.fail_service
                 code = 1 if self.fail_service else 0
             elif "enable" in args:
-                self.enabled = True
+                if self.enable_changes_state:
+                    self.enabled = True
             elif "daemon-reload" in args:
                 self.loaded_unit = self.expected_unit
             elif "show" in args:
-                output = ("FragmentPath=" + str(self.loaded_unit) + "\nDropInPaths=" + self.drop_ins
-                          + "\nKillMode=mixed\nTimeoutStopUSec=infinity\nRestart=always\n").encode()
+                properties = {"FragmentPath": str(self.loaded_unit), "DropInPaths": self.drop_ins,
+                              "KillMode": "mixed", "TimeoutStopUSec": "infinity", "Restart": "always",
+                              "KillSignal": self.kill_signal, "SendSIGHUP": self.send_sighup,
+                              "ExecStop": self.exec_stop, "ExecStopPost": self.exec_stop_post,
+                              "RuntimeDirectory": self.runtime_directory, "RuntimeDirectoryPreserve": self.runtime_preserve}
+                requested = [arg.removeprefix("--property=") for arg in args if arg.startswith("--property=")]
+                output = "".join(name + "=" + properties[name] + "\n" for name in requested).encode()
             return subprocess.CompletedProcess(args, code, output, b"PRIVATE_SYSTEMD_OUTPUT")
         if args[:2] == ["docker", "inspect"] and "{{json .}}" in args:
             self.calls.append(args)
@@ -309,7 +332,8 @@ class InstallerTests(unittest.TestCase):
     def test_service_unit_drains_workers_and_never_removes_socket_directory(self):
         self.install_web()
         unit = self.unit.read_text()
-        for setting in ("Restart=always", "KillMode=mixed", "TimeoutStopSec=infinity", "UMask=0077", "User=root"):
+        for setting in ("Restart=always", "KillMode=mixed", "KillSignal=SIGTERM", "SendSIGHUP=no",
+                        "TimeoutStopSec=infinity", "UMask=0077", "User=root"):
             self.assertIn(setting, unit)
         self.assertNotIn("RuntimeDirectory=", unit)
         self.assertNotIn("ExecStopPost=", unit)
@@ -365,6 +389,138 @@ class InstallerTests(unittest.TestCase):
             self.install_web()
         self.assertFalse(any("stop" in c or "up" in c for c in self.docker.calls))
         self.assertTrue(self.docker.active)
+
+    def _assert_existing_unit_rejected_before_mutations(self, expected_unit):
+        previous_env = (self.install / "deploy/.env").read_bytes()
+        previous_overlay = self.overlay.read_bytes()
+        previous_records = set(self.settings.state_dir.glob("bootstrap-*"))
+        previous_backups = set(self.settings.backups_dir.iterdir())
+        previous_inode = self.settings.socket.parent.stat().st_ino
+        self.docker.calls.clear()
+        with self.assertRaises(self.installer.InstallError):
+            self.install_web()
+        self.assertEqual(self.unit.read_bytes(), expected_unit)
+        self.assertEqual((self.install / "deploy/.env").read_bytes(), previous_env)
+        self.assertEqual(self.overlay.read_bytes(), previous_overlay)
+        self.assertEqual(set(self.settings.state_dir.glob("bootstrap-*")), previous_records)
+        self.assertEqual(set(self.settings.backups_dir.iterdir()), previous_backups)
+        self.assertEqual(self.settings.socket.parent.stat().st_ino, previous_inode)
+        self.assertFalse(any("stop" in c or "up" in c or "enable" in c or "daemon-reload" in c
+                             for c in self.docker.calls))
+
+    def test_raw_unsafe_stop_signals_or_hangup_are_rejected_before_stop(self):
+        self.install_web()
+        original = self.unit.read_text()
+        for key, value, separator in (("KillSignal", "SIGKILL", "="), ("KillSignal", "SIGQUIT", "="),
+                                      ("SendSIGHUP", "yes", "="), ("KillSignal", "SIGKILL", " = "),
+                                      ("SendSIGHUP", "yes", " = ")):
+            with self.subTest(key=key, value=value, separator=separator):
+                text = "\n".join(line for line in original.splitlines() if line.partition("=")[0].strip() != key) + "\n"
+                text = text.replace("KillMode=mixed", "KillMode=mixed\n" + key + separator + value)
+                self.unit.write_text(text)
+                self._assert_existing_unit_rejected_before_mutations(text.encode())
+
+    def test_unsafe_loaded_signals_are_rejected_even_when_disk_unit_is_safe(self):
+        self.install_web()
+        safe_unit = self.unit.read_bytes()
+        for signal_number, hangup in (("9", "no"), ("3", "no"), ("15", "yes")):
+            with self.subTest(signal=signal_number, hangup=hangup):
+                # Disk was corrected without daemon-reload; stop still uses
+                # the old loaded signal settings and must not be issued.
+                self.docker.kill_signal, self.docker.send_sighup = signal_number, hangup
+                self._assert_existing_unit_rejected_before_mutations(safe_unit)
+
+    def test_unsafe_loaded_stop_hooks_or_directory_cleanup_are_rejected_when_disk_is_safe(self):
+        self.install_web()
+        safe_unit = self.unit.read_bytes()
+        for stop, post, directory, preserve in (("{ path=/bin/false ; argv[]=/bin/false ; }", "", "", "no"),
+                                                ("", "{ path=/bin/rm ; argv[]=/bin/rm -rf /run/sub2api-car-updater ; }", "", "no"),
+                                                ("", "", "sub2api-car-updater", "no"),
+                                                ("", "", "sub2api-car-updater", "restart")):
+            with self.subTest(stop=stop, post=post, directory=directory, preserve=preserve):
+                self.docker.exec_stop, self.docker.exec_stop_post = stop, post
+                self.docker.runtime_directory, self.docker.runtime_preserve = directory, preserve
+                self._assert_existing_unit_rejected_before_mutations(safe_unit)
+
+    def test_static_unit_without_install_section_is_rejected_before_stop(self):
+        self.install_web()
+        static = self.unit.read_text().split("[Install]", 1)[0]
+        self.unit.write_text(static)
+        self.docker.enabled = False
+        self.docker.enable_state_override = "static"
+        self.docker.enable_changes_state = False
+        self._assert_existing_unit_rejected_before_mutations(static.encode())
+
+    def test_unit_must_install_into_server_boot_target(self):
+        self.install_web()
+        original = self.unit.read_text()
+        for dependency in ("", "WantedBy=graphical.target", "WantedBy=custom.target", "WantedBy=multi-user.target\nWantedBy="):
+            with self.subTest(dependency=dependency):
+                text = original.split("[Install]", 1)[0] + "[Install]\n" + dependency + "\n"
+                self.unit.write_text(text)
+                self._assert_existing_unit_rejected_before_mutations(text.encode())
+
+    def test_enable_success_requires_explicit_persistent_enabled_state(self):
+        self.install_web()
+        self.docker.enable_changes_state = False
+        self.docker.enabled = False
+        for state in ("static", "enabled-runtime", "indirect", "disabled", "alias"):
+            with self.subTest(state=state):
+                self.docker.enable_state_override = state
+                self.docker.calls.clear()
+                self.reports.clear()
+                with self.assertRaises(self.installer.InstallError):
+                    self.install_web()
+                self.assertFalse(any("Web updater installation complete" in line for line in self.reports))
+                self.assertTrue(any("enable" in call for call in self.docker.calls))
+                self.assertFalse(self.docker.enabled)
+
+    def test_first_install_allows_legacy_absent_unit_enablement_with_empty_stdout(self):
+        self.docker.absent_enablement_empty = True
+        self.assertFalse(self.install_web().no_op)
+        self.assertTrue(self.docker.active and self.docker.enabled)
+
+    def test_existing_unit_with_unknown_empty_enablement_fails_before_stop(self):
+        self.install_web()
+        self.docker.enable_state_override = ""
+        self._assert_existing_unit_rejected_before_mutations(self.unit.read_bytes())
+
+    def test_empty_enablement_is_never_accepted_after_enable(self):
+        self.docker.enable_state_override = ""
+        with self.assertRaises(self.installer.InstallError):
+            self.install_web()
+        self.assertTrue(any("enable" in call for call in self.docker.calls))
+        self.assertFalse(any("Web updater installation complete" in line for line in self.reports))
+
+    def test_safe_default_signals_and_required_boot_dependency_preserve_operator_bytes(self):
+        self.install_web()
+        text = "\n".join(line for line in self.unit.read_text().splitlines()
+                         if not line.startswith(("KillSignal=", "SendSIGHUP="))) + "\n"
+        text = text.replace("WantedBy=multi-user.target", "RequiredBy=multi-user.target\nWantedBy=graphical.target")
+        self.unit.write_text(text)
+        self.docker.calls.clear()
+        self.assertTrue(self.install_web().no_op)
+        self.assertEqual(self.unit.read_text(), text)
+        self.assertFalse(any("up" in call for call in self.docker.calls))
+
+    def test_daemon_supported_sigint_is_a_safe_explicit_stop_signal(self):
+        self.install_web()
+        text = "\n".join(line for line in self.unit.read_text().splitlines() if not line.startswith("KillSignal=")) + "\n"
+        text = text.replace("KillMode=mixed", "KillMode=mixed\nKillSignal=SIGINT")
+        self.unit.write_text(text)
+        self.docker.kill_signal = "2"
+        self.assertTrue(self.install_web().no_op)
+        self.assertEqual(self.unit.read_text(), text)
+
+    def test_safe_unit_whitespace_and_preserved_runtime_directory_keep_operator_bytes(self):
+        self.install_web()
+        text = self.unit.read_text().replace("KillMode=mixed", "KillMode = mixed\nRuntimeDirectory = sub2api-car-updater\nRuntimeDirectoryPreserve = yes")
+        text = text.replace("KillSignal=SIGTERM", "KillSignal = SIGTERM").replace("SendSIGHUP=no", "SendSIGHUP = no")
+        text = text.replace("WantedBy=multi-user.target", "WantedBy = multi-user.target")
+        self.unit.write_text(text)
+        self.docker.runtime_directory, self.docker.runtime_preserve = "sub2api-car-updater", "yes"
+        self.assertTrue(self.install_web().no_op)
+        self.assertEqual(self.unit.read_text(), text)
 
     def _assert_definition_rejected_without_mutations(self):
         with self.assertRaises(self.installer.InstallError):

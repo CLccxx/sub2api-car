@@ -228,26 +228,39 @@ def _service_command(config):
 
 def _validate_unit(data, config):
     section, service = "", {}
+    boot_dependencies = {"WantedBy": [], "RequiredBy": []}
     for line in data.decode("utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith(("#", ";")):
             continue
         if line.startswith("[") and line.endswith("]"):
             section = line[1:-1]
-        elif section == "Service":
+        elif section in {"Service", "Install"}:
             if "=" not in line:
                 raise InstallError("The existing systemd unit is not a compatible updater unit.")
-            key, value = line.split("=", 1)
-            if key in service:
-                raise InstallError("Duplicate systemd service settings require operator review.")
-            service[key] = value
+            key, value = (part.strip() for part in line.split("=", 1))
+            if section == "Service":
+                if key in service:
+                    raise InstallError("Duplicate systemd service settings require operator review.")
+                service[key] = value
+            elif key in boot_dependencies:
+                targets = shlex.split(value)
+                if targets:
+                    boot_dependencies[key].extend(targets)
+                else:
+                    # systemd's empty assignment resets earlier list entries.
+                    boot_dependencies[key].clear()
     required = {"User": "root", "Group": "root", "Restart": "always", "KillMode": "mixed",
                 "TimeoutStopSec": "infinity", "UMask": "0077"}
     if (any(service.get(k) != v for k, v in required.items())
             or shlex.split(service.get("ExecStart", "")) != _service_command(config)
+            or service.get("KillSignal", "SIGTERM").strip() not in {"SIGTERM", "TERM", "15", "SIGINT", "INT", "2"}
+            or service.get("SendSIGHUP", "no").strip().lower() not in {"no", "false", "off", "0"}
             or any(key.startswith("Exec") and key != "ExecStart" for key in service)
             or ("RuntimeDirectory" in service and service.get("RuntimeDirectoryPreserve") != "yes")):
         raise InstallError("The existing systemd unit is unrelated or incompatible; preserve it and reconcile its settings before retrying.")
+    if not any("multi-user.target" in targets for targets in boot_dependencies.values()):
+        raise InstallError("The updater unit must install a persistent WantedBy or RequiredBy dependency on multi-user.target.")
 
 
 def _render_settings(release, config):
@@ -334,9 +347,30 @@ def _systemctl(helper, runner, action, query=False):
     helper._run(runner, args, "Host updater service " + action, timeout=None if action == "stop" else 60)
 
 
+def _enablement_state(runner):
+    """Read the named state: is-enabled also exits zero for non-boot states."""
+    try:
+        result = runner(["systemctl", "is-enabled", SERVICE], timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        raise InstallError("Unable to inspect updater enablement; command output was withheld.") from None
+    output = result.stdout or b""
+    if result.returncode not in (0, 1, 3, 4) or len(output) > 128:
+        raise InstallError("Unable to inspect updater enablement; command output was withheld.")
+    try:
+        state = output.decode("ascii").strip()
+    except UnicodeError:
+        raise InstallError("The updater enablement state is invalid.") from None
+    known = {"enabled", "enabled-runtime", "linked", "linked-runtime", "alias", "static", "indirect",
+             "disabled", "masked", "masked-runtime", "generated", "transient", "bad", "not-found"}
+    if state not in known or (state == "enabled" and result.returncode != 0):
+        raise InstallError("The updater enablement state is invalid.")
+    return state
+
+
 def _validate_loaded_unit(helper, runner, unit_path, required=False):
     """A drop-in or stale loaded unit must not defeat graceful worker shutdown."""
-    names = ("FragmentPath", "DropInPaths", "KillMode", "TimeoutStopUSec", "Restart")
+    names = ("FragmentPath", "DropInPaths", "KillMode", "KillSignal", "SendSIGHUP", "TimeoutStopUSec", "Restart",
+             "ExecStop", "ExecStopPost", "RuntimeDirectory", "RuntimeDirectoryPreserve")
     command = ["systemctl", "show"] + ["--property=" + name for name in names] + [SERVICE]
     result = helper._run(runner, command, "Inspect effective updater service", timeout=30)
     if len(result.stdout) > MAX_CONFIG_BYTES:
@@ -352,6 +386,9 @@ def _validate_loaded_unit(helper, runner, unit_path, required=False):
     if not required and not settings.get("FragmentPath"):
         return
     if (unit_path is None or settings.get("FragmentPath") != str(unit_path) or settings.get("KillMode") != "mixed"
+            or settings.get("KillSignal") not in {"15", "2"} or settings.get("SendSIGHUP") != "no"
+            or settings.get("ExecStop") or settings.get("ExecStopPost")
+            or (settings.get("RuntimeDirectory") and settings.get("RuntimeDirectoryPreserve") != "yes")
             or settings.get("TimeoutStopUSec") != "infinity" or settings.get("Restart") != "always"):
         raise InstallError("The loaded updater unit does not have the expected path and graceful shutdown settings; reconcile it before retrying.")
 
@@ -520,10 +557,14 @@ def install(archive, config=None, sha256=None, runner=None, report=print, status
         helper._safe_directory(system_root)
         preflight = _preflight(helper, release, bundle, config, runner, system_root)
         active = _systemctl(helper, runner, "is-active", query=True)
-        enabled = _systemctl(helper, runner, "is-enabled", query=True)
         if active and preflight[2] is None:
             raise InstallError("An active service exists without the expected external unit; reconcile it before bootstrap.")
         _validate_loaded_unit(helper, runner, preflight[1] if preflight[2] is not None else None, required=active)
+        # After proving there is no installed/loaded unit or drop-in, the first
+        # install is unenabled. Older systemd returns only a stderr error for
+        # is-enabled on an absent unit; strict named state is required once one
+        # exists, and always after enable below.
+        enabled = preflight[2] is not None and _enablement_state(runner) == "enabled"
         stopped, result, record, state = False, None, None, None
         try:
             if preflight[2] is not None:
@@ -555,6 +596,8 @@ def install(archive, config=None, sha256=None, runner=None, report=print, status
             _systemctl(helper, runner, "daemon-reload")
             _validate_loaded_unit(helper, runner, unit_path, required=True)
             _systemctl(helper, runner, "enable")
+            if _enablement_state(runner) != "enabled":
+                raise InstallError("Persistent updater boot enablement was not confirmed.")
             _systemctl(helper, runner, "start")
             status = probe(config.socket)
             if (not isinstance(status, dict) or type(status.get("protocol_version")) is not int
