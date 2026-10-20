@@ -45,16 +45,37 @@ Swap，并在上线后观察实际内存和并发。数据库和 Redis 只在 Do
 需要 Python 3.9 或更高版本，不需要重新初始化数据库或修改原有密钥。
 首次需要在服务器执行安装；之后常规版本更新只需点击网页按钮。
 
-从本仓库 `v0.2.17-car.7` Release 下载以下三个文件到同一目录（例如 `/home/ubuntu`）：
+从本仓库最新正式 Release 下载以下三个文件到同一目录（例如 `/home/ubuntu`），
+以下以 `v0.2.17-car.8` 为例：
 
-- `sub2api-car-0.2.17-car.7-linux-amd64.tar.gz`
-- `sub2api-car-0.2.17-car.7-linux-amd64.tar.gz.sha256`
+- `sub2api-car-0.2.17-car.8-linux-amd64.tar.gz`
+- `sub2api-car-0.2.17-car.8-linux-amd64.tar.gz.sha256`
 - `install_car_web_update.py`
+
+早期部署若曾把 `/opt/sub2api-car` 交给 `ubuntu:ubuntu`，需要先迁移程序和配置的属主。
+网页更新服务由 root 运行；旧属主会使安装器在升级前报
+`Updater paths must be root-owned and not writable by other users.`。
+先只读检查，跳过持久数据目录：
+
+```bash
+sudo find /opt/sub2api-car -path /opt/sub2api-car/deploy/car-data -prune -o -printf '%u:%g %m %p\n'
+```
+
+如果程序目录及配置仍属于 `ubuntu`，执行一次：
+
+```bash
+sudo find /opt/sub2api-car \
+  -path /opt/sub2api-car/deploy/car-data -prune -o \
+  -exec chown -h root:root {} +
+```
+
+此命令只调整程序和配置的属主，保留文件内容及权限位（包括 `.env` 的 `0600`），
+并跳过整个 `car-data` 子树，保留 PostgreSQL、Redis 和应用数据各自的属主和权限。
 
 执行：
 
 ```bash
-sudo python3 -I -B /home/ubuntu/install_car_web_update.py /home/ubuntu/sub2api-car-0.2.17-car.7-linux-amd64.tar.gz
+sudo python3 -I -B /home/ubuntu/install_car_web_update.py /home/ubuntu/sub2api-car-0.2.17-car.8-linux-amd64.tar.gz
 ```
 
 安装器使用新包中的校验器兼容旧安装，验证完整包后安装宿主机更新服务，
@@ -78,8 +99,8 @@ sudo systemctl status sub2api-car-updater --no-pager
 再为同一提交创建新的定制版本标签，例如：
 
 ```bash
-git tag -a v0.2.17-car.8 -m "说明本次更新内容"
-git push origin v0.2.17-car.8
+git tag -a v0.2.17-car.9 -m "说明本次更新内容"
+git push origin v0.2.17-car.9
 ```
 
 GitHub Actions 的 **Carpool release** 工作流绑定标签提交构建完整 Linux amd64 包，
