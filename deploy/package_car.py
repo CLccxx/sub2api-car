@@ -297,8 +297,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 130
     print("\nPACKAGE_OK\n版本：%s\n提交：%s\n部署包：%s\n校验文件：%s\nSHA256：%s" % (
         args.version, release.commit, release.archive, release.checksum, release.sha256))
-    print("上传部署包和校验文件到服务器 /home/ubuntu 后执行：\n"
-          "sudo python3 /opt/sub2api-car/deploy/upgrade_car.py /home/ubuntu/" + release.archive.name)
+    print("首次启用网页更新：将部署包、校验文件和以下安装器上传到服务器 /home/ubuntu：\n"
+          + str(release.directory / "deploy/install_car_web_update.py")
+          + "\n然后执行：\nsudo python3 -I -B /home/ubuntu/install_car_web_update.py /home/ubuntu/"
+          + release.archive.name)
     return 0
 
 
