@@ -139,6 +139,19 @@ class ReleaseMatrixTest(unittest.TestCase):
         self.assertEqual(output['owner_lower'], 'exampleowner')
         self.assertEqual(len(json.loads(output['matrix'])['include']), 5)
 
+    def test_custom_release_tags_require_the_car_workflow(self):
+        for ref in ('v0.2.17-car.7', 'refs/tags/v0.2.17-car.7'):
+            for dry_run in (False, True):
+                with self.subTest(ref=ref, dry_run=dry_run):
+                    with patch.object(subprocess, 'check_output', return_value='a' * 40 + '\n'):
+                        with self.assertRaisesRegex(ValueError, 'Carpool release'):
+                            release.plan(argparse.Namespace(ref=ref, dry_run=dry_run, simple=False))
+
+    def test_branch_names_containing_car_are_valid_manual_dry_runs(self):
+        with patch.dict(os.environ, {'GITHUB_OUTPUT': 'outputs'}), patch.object(subprocess, 'check_output', return_value='a' * 40 + '\n'):
+            release.plan(argparse.Namespace(ref='feature-car.cleanup', dry_run=True, simple=False))
+        self.assertIn('dry_run=true', Path('outputs').read_text())
+
     def test_docker_commands_do_not_publish_during_dry_run(self):
         fake_bin = Path('bin')
         fake_bin.mkdir()

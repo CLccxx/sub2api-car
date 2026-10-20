@@ -182,6 +182,7 @@ type GeminiTierQuotaConfig struct {
 }
 
 type UpdateConfig struct {
+	ManagedSocket string `mapstructure:"managed_socket"`
 	// ProxyURL 用于访问 GitHub 的代理地址
 	// 支持 http/https/socks5/socks5h 协议
 	// 例如: "http://127.0.0.1:7890", "socks5://127.0.0.1:1080"
@@ -2651,6 +2652,7 @@ func setEnvReachableDefaults() {
 	viper.SetDefault("gateway.session_idle_timeout_minutes", 0)
 	viper.SetDefault("gateway.user_message_queue.mode", "")
 	viper.SetDefault("update.proxy_url", "")
+	viper.SetDefault("update.managed_socket", "")
 
 	// sticky_escape_enabled is the one exception to the zero-value rule: its
 	// effective default is true, applied post-unmarshal via a viper.IsSet guard.
@@ -2711,6 +2713,9 @@ func setEnvReachableDefaults() {
 }
 
 func (c *Config) Validate() error {
+	if c.Update.ManagedSocket != "" && !strings.HasPrefix(c.Update.ManagedSocket, "/") {
+		return fmt.Errorf("update.managed_socket must be an absolute Unix socket path")
+	}
 	if c.Gateway.MinOutputTokens < 16 {
 		return fmt.Errorf("gateway.min_output_tokens must be at least 16")
 	}

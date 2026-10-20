@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+      - '!v*-car.*'
   workflow_dispatch:
     inputs:
       tag:

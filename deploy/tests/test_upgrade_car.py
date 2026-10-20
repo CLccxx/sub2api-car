@@ -153,6 +153,14 @@ class BundleTests(unittest.TestCase):
         bundle = upgrader.verify_archive(make_bundle(self.root, contents(catalog=False)))
         self.assertIsNone(bundle.migrations)
 
+    def test_web_updater_bundle_files_are_optional_for_legacy_and_allowed(self):
+        files = contents()
+        for name in ("car_release.py", "car_update_service.py", "install_car_web_update.py",
+                     "sub2api-car-updater.service", "docker-compose.car-updater.yml"):
+            files["deploy/" + name] = b"web updater fixture\n"
+        bundle = upgrader.verify_archive(make_bundle(self.root, files))
+        self.assertIn("deploy/install_car_web_update.py", bundle.files)
+
 
 class FakeDocker:
     """A command boundary simulator; all filesystem transactions stay real."""
@@ -281,6 +289,94 @@ class UpgradeTests(unittest.TestCase):
         self.assertFalse(any("stop" in c for c in self.docker.calls))
         self.assertNotIn("PRIVATE_PASSWORD", " ".join(self.reports))
 
+    def test_prepared_image_reuses_verified_immutable_image_and_still_takes_backup(self):
+        self.assertTrue(hasattr(upgrader, "PreparedImage"), "Explicit prepared image contract is required")
+        verified = upgrader.verify_archive(self.archive)
+        prepared = upgrader.PreparedImage(verified.sha256, VERSION, COMMIT, self.docker.new_id)
+        result = upgrader.upgrade(self.archive, self.config, runner=self.docker,
+                                  report=self.reports.append, prepared_image=prepared)
+        self.assertFalse(any("build" in call for call in self.docker.calls))
+        self.assertTrue((result.backup_dir / "database.dump").is_file())
+        self.assertTrue(any(call[:2] == ["docker", "run"] and prepared.image_id in call for call in self.docker.calls))
+        self.assertEqual((result.version, result.commit), (VERSION, COMMIT))
+
+    def test_prepared_image_mismatches_leave_live_files_and_containers_untouched(self):
+        self.assertTrue(hasattr(upgrader, "PreparedImage"), "Explicit prepared image contract is required")
+        checksum = upgrader.verify_archive(self.archive).sha256
+        for mismatch in ("archive", "version", "commit", "image_id", "tag", "runtime"):
+            with self.subTest(mismatch=mismatch):
+                self.docker = FakeDocker(self.install)
+                values = [checksum, VERSION, COMMIT, self.docker.new_id]
+                if mismatch == "archive":
+                    values[0] = "f" * 64
+                elif mismatch == "version":
+                    values[1] = OLD_VERSION
+                elif mismatch == "commit":
+                    values[2] = OLD_COMMIT
+                elif mismatch == "image_id":
+                    values[3] = "invalid"
+                elif mismatch == "tag":
+                    self.docker.new_id = "sha256:" + "f" * 64
+                runner = self.docker
+                if mismatch == "runtime":
+                    def wrong_runtime(args, **kwargs):
+                        result = self.docker(args, **kwargs)
+                        if args[:2] == ["docker", "run"]:
+                            result.stdout = ("Sub2API " + OLD_VERSION + " (commit: " + OLD_COMMIT + ", built: now)\n").encode()
+                        return result
+                    runner = wrong_runtime
+                with self.assertRaises(upgrader.UpgradeError):
+                    upgrader.upgrade(self.archive, self.config, runner=runner, report=self.reports.append,
+                                      prepared_image=upgrader.PreparedImage(*values))
+                self.assertEqual((self.install / "deploy/.env").read_bytes(), self.env)
+                self.assertEqual((self.install / "BUILD_VERSION").read_text().strip(), OLD_VERSION)
+                self.assertFalse(any("build" in c or "up" in c or "stop" in c or "pg_dump" in c for c in self.docker.calls))
+
+    def test_prepared_image_cannot_downgrade_or_accept_same_version_with_different_image(self):
+        checksum = upgrader.verify_archive(self.archive).sha256
+        prepared = upgrader.PreparedImage(checksum, VERSION, COMMIT, self.docker.new_id)
+        for running_version in ("0.1.0-car.7", VERSION):
+            with self.subTest(running_version=running_version):
+                self.docker = FakeDocker(self.install)
+                self.docker.version, self.docker.commit = running_version, COMMIT
+                if running_version == VERSION:
+                    self.docker.new_id = "sha256:" + "f" * 64
+                env = self.env.replace(OLD_VERSION.encode(), running_version.encode())
+                (self.install / "deploy/.env").write_bytes(env)
+                with self.assertRaises(upgrader.UpgradeError):
+                    upgrader.upgrade(self.archive, self.config, runner=self.docker, report=self.reports.append,
+                                      prepared_image=prepared)
+                self.assertEqual((self.install / "deploy/.env").read_bytes(), env)
+                self.assertFalse(any("build" in c or "up" in c or "pg_dump" in c for c in self.docker.calls))
+
+    def test_prepared_noop_revalidates_tag_identity_and_immutable_image_version(self):
+        checksum = upgrader.verify_archive(self.archive).sha256
+        self.docker.version, self.docker.commit = VERSION, COMMIT
+        env = self.env.replace(OLD_VERSION.encode(), VERSION.encode())
+        (self.install / "deploy/.env").write_bytes(env)
+        prepared = upgrader.PreparedImage(checksum, VERSION, COMMIT, self.docker.new_id)
+        for mismatch in ("tag", "runtime", None):
+            with self.subTest(mismatch=mismatch):
+                self.docker.calls.clear()
+                def inspect_candidate(args, **kwargs):
+                    result = self.docker(args, **kwargs)
+                    if mismatch == "tag" and args[:3] == ["docker", "image", "inspect"]:
+                        result.stdout = ("sha256:" + "f" * 64 + "\n").encode()
+                    if mismatch == "runtime" and args[:2] == ["docker", "run"]:
+                        result.stdout = ("Sub2API " + OLD_VERSION + " (commit: " + OLD_COMMIT + ", built: now)\n").encode()
+                    return result
+                if mismatch is not None:
+                    with self.assertRaises(upgrader.UpgradeError):
+                        upgrader.upgrade(self.archive, self.config, runner=inspect_candidate,
+                                         report=self.reports.append, prepared_image=prepared)
+                else:
+                    result = upgrader.upgrade(self.archive, self.config, runner=inspect_candidate,
+                                              report=self.reports.append, prepared_image=prepared)
+                    self.assertTrue(result.no_op)
+                    self.assertTrue(any(c[:2] == ["docker", "run"] and prepared.image_id in c for c in self.docker.calls))
+                self.assertEqual((self.install / "deploy/.env").read_bytes(), env)
+                self.assertFalse(any("build" in c or "up" in c or "pg_dump" in c for c in self.docker.calls))
+
     def test_build_backup_and_image_verification_failures_leave_live_version_intact(self):
         for stage in ("build", "pg_dump", "pg_restore", "run"):
             with self.subTest(stage=stage):
@@ -360,6 +456,50 @@ class UpgradeTests(unittest.TestCase):
         with self.assertRaises(upgrader.UpgradeError):
             self.run_upgrade()
         self.assertEqual(self.docker.calls, [])
+
+    def test_overlay_is_optional_retained_and_used_for_every_compose_call(self):
+        overlay = self.install / "deploy/docker-compose.car-updater.yml"
+        overlay.write_bytes(b"operator socket override\n")
+        overlay.chmod(0o640)
+        result = self.run_upgrade()
+        self.assertEqual(overlay.read_bytes(), b"operator socket override\n")
+        self.assertEqual(stat.S_IMODE(overlay.stat().st_mode), 0o640)
+        self.assertEqual((result.backup_dir / "files/deploy/docker-compose.car-updater.yml").read_bytes(), overlay.read_bytes())
+        for call in self.docker.calls:
+            if call[:2] == ["docker", "compose"]:
+                self.assertIn(str(overlay), call)
+                self.assertEqual(call[call.index(str(overlay)) - 1], "-f")
+
+    def test_overlay_symlinks_rejected_before_docker(self):
+        (self.install / "deploy/docker-compose.car-updater.yml").symlink_to(self.install / "deploy/docker-compose.car.yml")
+        with self.assertRaises(upgrader.UpgradeError):
+            self.run_upgrade()
+        self.assertEqual(self.docker.calls, [])
+
+    def test_same_version_reconfigure_uses_backup_and_rejects_conflict_or_unhealthy(self):
+        self.docker.version, self.docker.commit = VERSION, COMMIT
+        (self.install / "deploy/.env").write_bytes(self.env.replace(OLD_VERSION.encode(), VERSION.encode()))
+        (self.install / "BUILD_VERSION").write_text(VERSION + "\n")
+        (self.install / "BUILD_COMMIT").write_text(COMMIT + "\n")
+        for commit, health in ((OLD_COMMIT, "healthy"), (COMMIT, "unhealthy")):
+            self.docker.commit, self.docker.health = commit, health
+            with self.assertRaises(upgrader.UpgradeError):
+                upgrader.upgrade(self.archive, self.config, runner=self.docker, report=self.reports.append, reconfigure=True)
+        self.docker.commit, self.docker.health = COMMIT, "healthy"
+        result = upgrader.upgrade(self.archive, self.config, runner=self.docker, report=self.reports.append, reconfigure=True)
+        self.assertFalse(result.no_op)
+        self.assertIsNotNone(result.backup_dir)
+        self.assertTrue((result.backup_dir / "database.dump").exists())
+        self.assertEqual(len([c for c in self.docker.calls if "up" in c]), 1)
+        self.assertIn("--force-recreate", next(c for c in self.docker.calls if "up" in c))
+        self.assertFalse(any("build" in c for c in self.docker.calls))
+
+    def test_installer_lock_handoff_cannot_outlive_lock(self):
+        with upgrader.installation_lock(self.install) as guard:
+            result = upgrader.upgrade(self.archive, self.config, runner=self.docker, report=self.reports.append, _lock=guard)
+        self.assertFalse(result.no_op)
+        with self.assertRaises(upgrader.UpgradeError):
+            upgrader.upgrade(self.archive, self.config, runner=self.docker, report=self.reports.append, _lock=guard)
 
     def test_symlink_live_target_and_lock_are_rejected(self):
         victim = self.root / "outside"

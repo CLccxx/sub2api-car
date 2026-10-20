@@ -65,16 +65,26 @@ type UpdateService struct {
 	githubClient   GitHubReleaseClient
 	currentVersion string
 	buildType      string // "source" for manual builds, "release" for CI builds
+	repository     string
+	managedUpdater ManagedUpdater
 }
 
 // NewUpdateService creates a new UpdateService
-func NewUpdateService(cache UpdateCache, githubClient GitHubReleaseClient, version, buildType string) *UpdateService {
-	return &UpdateService{
+func NewUpdateService(cache UpdateCache, githubClient GitHubReleaseClient, version, buildType string, options ...UpdateServiceOptions) *UpdateService {
+	svc := &UpdateService{
 		cache:          cache,
 		githubClient:   githubClient,
 		currentVersion: version,
 		buildType:      buildType,
+		repository:     githubRepo,
 	}
+	if svc.IsManagedUpdate() {
+		svc.repository = carGitHubRepo
+	}
+	if len(options) > 0 {
+		svc.managedUpdater = options[0].ManagedUpdater
+	}
+	return svc
 }
 
 // UpdateInfo contains update information
@@ -86,6 +96,8 @@ type UpdateInfo struct {
 	Cached         bool         `json:"cached"`
 	Warning        string       `json:"warning,omitempty"`
 	BuildType      string       `json:"build_type"` // "source" or "release"
+	Repository     string       `json:"repository"`
+	UpdateMode     string       `json:"update_mode"`
 }
 
 // ReleaseInfo contains GitHub release details
@@ -152,6 +164,8 @@ func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (*UpdateInf
 			HasUpdate:      false,
 			Warning:        err.Error(),
 			BuildType:      s.buildType,
+			Repository:     s.repository,
+			UpdateMode:     s.updateMode(),
 		}, nil
 	}
 
@@ -163,6 +177,9 @@ func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (*UpdateInf
 // PerformUpdate downloads and applies the update
 // Uses atomic file replacement pattern for safe in-place updates
 func (s *UpdateService) PerformUpdate(ctx context.Context) error {
+	if s.IsManagedUpdate() {
+		return ErrManagedUpdateRequired
+	}
 	info, err := s.CheckUpdate(ctx, true)
 	if err != nil {
 		return err
@@ -281,6 +298,9 @@ func (s *UpdateService) applyReleaseAssets(ctx context.Context, releaseAssets []
 
 // Rollback restores the previous version
 func (s *UpdateService) Rollback() error {
+	if s.IsManagedUpdate() {
+		return ErrManagedUpdateRequired
+	}
 	exePath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("failed to get executable path: %w", err)
@@ -307,6 +327,9 @@ func (s *UpdateService) Rollback() error {
 // strictly older than the current version (the current version itself is excluded),
 // newest first. Draft and prerelease entries are skipped.
 func (s *UpdateService) ListRollbackVersions(ctx context.Context) ([]RollbackVersion, error) {
+	if s.IsManagedUpdate() {
+		return []RollbackVersion{}, nil
+	}
 	releases, err := s.fetchRollbackCandidates(ctx)
 	if err != nil {
 		return nil, err
@@ -327,6 +350,9 @@ func (s *UpdateService) ListRollbackVersions(ctx context.Context) ([]RollbackVer
 // The target must be one of the versions returned by ListRollbackVersions;
 // anything else (including the current version) is rejected.
 func (s *UpdateService) RollbackToVersion(ctx context.Context, version string) error {
+	if s.IsManagedUpdate() {
+		return ErrManagedUpdateRequired
+	}
 	target := strings.TrimPrefix(strings.TrimSpace(version), "v")
 	if target == "" {
 		return ErrRollbackVersionNotAllowed
@@ -400,9 +426,17 @@ func (s *UpdateService) fetchRollbackCandidates(ctx context.Context) ([]*GitHubR
 }
 
 func (s *UpdateService) fetchLatestRelease(ctx context.Context) (*UpdateInfo, error) {
-	release, err := s.githubClient.FetchLatestRelease(ctx, githubRepo)
+	release, err := s.githubClient.FetchLatestRelease(ctx, s.repository)
 	if err != nil {
 		return nil, err
+	}
+	if release == nil {
+		return nil, fmt.Errorf("release information is unavailable")
+	}
+	if s.IsManagedUpdate() {
+		if err := validateCarRelease(release); err != nil {
+			return nil, err
+		}
 	}
 
 	latestVersion := strings.TrimPrefix(release.TagName, "v")
@@ -427,8 +461,10 @@ func (s *UpdateService) fetchLatestRelease(ctx context.Context) (*UpdateInfo, er
 			HTMLURL:     release.HTMLURL,
 			Assets:      assets,
 		},
-		Cached:    false,
-		BuildType: s.buildType,
+		Cached:     false,
+		BuildType:  s.buildType,
+		Repository: s.repository,
+		UpdateMode: s.updateMode(),
 	}, nil
 }
 
@@ -594,6 +630,9 @@ func (s *UpdateService) extractBinary(archivePath, destPath string) error {
 }
 
 func (s *UpdateService) getFromCache(ctx context.Context) (*UpdateInfo, error) {
+	if s.cache == nil {
+		return nil, fmt.Errorf("update cache unavailable")
+	}
 	data, err := s.cache.GetUpdateInfo(ctx)
 	if err != nil {
 		return nil, err
@@ -603,9 +642,13 @@ func (s *UpdateService) getFromCache(ctx context.Context) (*UpdateInfo, error) {
 		Latest      string       `json:"latest"`
 		ReleaseInfo *ReleaseInfo `json:"release_info"`
 		Timestamp   int64        `json:"timestamp"`
+		Repository  string       `json:"repository"`
 	}
 	if err := json.Unmarshal([]byte(data), &cached); err != nil {
 		return nil, err
+	}
+	if cached.Repository != s.repository {
+		return nil, fmt.Errorf("update cache repository mismatch")
 	}
 
 	if time.Now().Unix()-cached.Timestamp > updateCacheTTL {
@@ -619,18 +662,25 @@ func (s *UpdateService) getFromCache(ctx context.Context) (*UpdateInfo, error) {
 		ReleaseInfo:    cached.ReleaseInfo,
 		Cached:         true,
 		BuildType:      s.buildType,
+		Repository:     s.repository,
+		UpdateMode:     s.updateMode(),
 	}, nil
 }
 
 func (s *UpdateService) saveToCache(ctx context.Context, info *UpdateInfo) {
+	if s.cache == nil {
+		return
+	}
 	cacheData := struct {
 		Latest      string       `json:"latest"`
 		ReleaseInfo *ReleaseInfo `json:"release_info"`
 		Timestamp   int64        `json:"timestamp"`
+		Repository  string       `json:"repository"`
 	}{
 		Latest:      info.LatestVersion,
 		ReleaseInfo: info.ReleaseInfo,
 		Timestamp:   time.Now().Unix(),
+		Repository:  s.repository,
 	}
 
 	data, _ := json.Marshal(cacheData)
@@ -648,6 +698,16 @@ func compareVersions(current, latest string) int {
 		}
 		if currentParts[i] > latestParts[i] {
 			return 1
+		}
+	}
+	if a, ok := carVersionParts(current); ok {
+		if b, ok := carVersionParts(latest); ok {
+			if a[3] < b[3] {
+				return -1
+			}
+			if a[3] > b[3] {
+				return 1
+			}
 		}
 	}
 	return 0

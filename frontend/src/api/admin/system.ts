@@ -19,6 +19,8 @@ export interface VersionInfo {
   cached: boolean
   warning?: string
   build_type: string // "source" for manual builds, "release" for CI builds
+  repository?: string
+  update_mode?: 'managed' | 'binary'
 }
 
 /**
@@ -43,6 +45,28 @@ export async function checkUpdates(force = false): Promise<VersionInfo> {
 export interface UpdateResult {
   message: string
   need_restart: boolean
+  operation_id?: string
+  update_mode?: 'managed' | 'binary'
+  status?: ManagedUpdateStatus
+}
+
+export type ManagedUpdatePhase = 'idle' | 'preparing' | 'ready' | 'applying' | 'succeeded' | 'failed' | 'rolled_back' | 'manual_recovery_required'
+export interface ManagedUpdateStatus {
+  protocol_version: 1
+  phase: ManagedUpdatePhase
+  operation_id: string
+  target_version: string
+  target_commit: string
+  current_version: string
+  message: string
+  error_code: string
+  backup_path: string
+  step?: string
+}
+
+export async function getUpdateStatus(): Promise<ManagedUpdateStatus> {
+  const { data } = await apiClient.get<ManagedUpdateStatus>('/admin/system/update-status', { timeout: 15000 })
+  return data
 }
 
 export interface RollbackVersionInfo {
@@ -96,14 +120,15 @@ export async function rollback(version?: string): Promise<UpdateResult> {
 /**
  * Restart the service
  */
-export async function restartService(): Promise<{ message: string }> {
-  const { data } = await apiClient.post<{ message: string }>('/admin/system/restart')
+export async function restartService(operationID?: string): Promise<{ message: string; status?: ManagedUpdateStatus }> {
+  const { data } = await apiClient.post<{ message: string; status?: ManagedUpdateStatus }>('/admin/system/restart', operationID ? { operation_id: operationID } : undefined)
   return data
 }
 
 export const systemAPI = {
   getVersion,
   checkUpdates,
+  getUpdateStatus,
   performUpdate,
   getRollbackVersions,
   rollback,

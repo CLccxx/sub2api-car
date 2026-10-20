@@ -24,6 +24,9 @@ RELEASE_FILES = (
     "deploy/docker-entrypoint.sh", "deploy/docker-compose.car.yml",
     "deploy/Caddyfile.car", "deploy/init-car.sh",
     "deploy/CARPOOL_DEPLOYMENT.md", "deploy/upgrade_car.py",
+    "deploy/car_release.py", "deploy/car_update_service.py",
+    "deploy/install_car_web_update.py", "deploy/sub2api-car-updater.service",
+    "deploy/docker-compose.car-updater.yml",
 )
 VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+-car\.[0-9]+\Z")
 COMMIT = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")

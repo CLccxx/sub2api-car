@@ -18,6 +18,13 @@ import (
 )
 
 type systemHandlerUpdateServiceStub struct {
+	managed               bool
+	managedStatus         *service.ManagedUpdateStatus
+	managedErr            error
+	preparedIDs           []string
+	activatedIDs          []string
+	managedDeadline       time.Time
+	managedContextError   error
 	performErr            error
 	updateInfo            *service.UpdateInfo
 	checkErr              error
@@ -34,6 +41,23 @@ type systemHandlerUpdateServiceStub struct {
 	rollbackVersions      []service.RollbackVersion
 	rollbackVersionsErr   error
 	rollbackVersionsCall  int
+}
+
+func (s *systemHandlerUpdateServiceStub) IsManagedUpdate() bool { return s.managed }
+func (s *systemHandlerUpdateServiceStub) GetManagedUpdateStatus(context.Context) (*service.ManagedUpdateStatus, error) {
+	return s.managedStatus, s.managedErr
+}
+func (s *systemHandlerUpdateServiceStub) PrepareManagedUpdate(ctx context.Context, id string) (*service.ManagedUpdateStatus, error) {
+	s.managedDeadline, _ = ctx.Deadline()
+	s.managedContextError = ctx.Err()
+	s.preparedIDs = append(s.preparedIDs, id)
+	return s.managedStatus, s.managedErr
+}
+func (s *systemHandlerUpdateServiceStub) ActivateManagedUpdate(ctx context.Context, id string) (*service.ManagedUpdateStatus, error) {
+	s.managedDeadline, _ = ctx.Deadline()
+	s.managedContextError = ctx.Err()
+	s.activatedIDs = append(s.activatedIDs, id)
+	return s.managedStatus, s.managedErr
 }
 
 func (s *systemHandlerUpdateServiceStub) CheckUpdate(_ context.Context, force bool) (*service.UpdateInfo, error) {
@@ -99,6 +123,8 @@ func newSystemHandlerTestRouter(t *testing.T, updateSvc *systemHandlerUpdateServ
 
 	router := gin.New()
 	router.POST("/api/v1/admin/system/update", handler.PerformUpdate)
+	router.POST("/api/v1/admin/system/restart", handler.RestartService)
+	router.GET("/api/v1/admin/system/update-status", handler.GetUpdateStatus)
 	router.POST("/api/v1/admin/system/rollback", handler.Rollback)
 	router.GET("/api/v1/admin/system/rollback-versions", handler.GetRollbackVersions)
 	return router

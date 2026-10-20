@@ -28,6 +28,10 @@ type SystemHandler struct {
 // its own deadline.
 const systemUpdateTimeout = 15 * time.Minute
 
+// Managed requests only enqueue work; the durable host job has its own lifetime.
+// The UI allows 90s before resolving an ambiguous unchanged enqueue response.
+const managedSystemRequestTimeout = 45 * time.Second
+
 // systemUpdateContext detaches a long-running update/rollback from the HTTP
 // request lifetime. Browsers and reverse proxies commonly abort idle requests
 // after 30-60s (axios default, nginx proxy_read_timeout), which canceled
@@ -49,6 +53,36 @@ type systemUpdateService interface {
 	Rollback() error
 	ListRollbackVersions(ctx context.Context) ([]service.RollbackVersion, error)
 	RollbackToVersion(ctx context.Context, version string) error
+}
+
+type managedSystemUpdateService interface {
+	IsManagedUpdate() bool
+	GetManagedUpdateStatus(context.Context) (*service.ManagedUpdateStatus, error)
+	PrepareManagedUpdate(context.Context, string) (*service.ManagedUpdateStatus, error)
+	ActivateManagedUpdate(context.Context, string) (*service.ManagedUpdateStatus, error)
+}
+
+func (h *SystemHandler) managedUpdater() managedSystemUpdateService {
+	svc, ok := h.updateSvc.(managedSystemUpdateService)
+	if ok && svc.IsManagedUpdate() {
+		return svc
+	}
+	return nil
+}
+
+// GetUpdateStatus is registered in the authenticated administrator route group.
+func (h *SystemHandler) GetUpdateStatus(c *gin.Context) {
+	managed := h.managedUpdater()
+	if managed == nil {
+		response.Error(c, http.StatusNotFound, "Managed updater is not enabled")
+		return
+	}
+	status, err := managed.GetManagedUpdateStatus(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, status)
 }
 
 // NewSystemHandler creates a new SystemHandler
@@ -84,8 +118,14 @@ func (h *SystemHandler) CheckUpdates(c *gin.Context) {
 // POST /api/v1/admin/system/update
 func (h *SystemHandler) PerformUpdate(c *gin.Context) {
 	operationID := buildSystemOperationID(c, "update")
+	managed := h.managedUpdater()
 	payload := gin.H{"operation_id": operationID}
 	executeAdminIdempotentJSON(c, "admin.system.update", payload, service.DefaultSystemOperationIdempotencyTTL(), func(ctx context.Context) (any, error) {
+		if managed != nil {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), managedSystemRequestTimeout)
+			defer cancel()
+		}
 		lock, release, err := h.acquireSystemLock(ctx, operationID)
 		if err != nil {
 			return nil, err
@@ -96,6 +136,15 @@ func (h *SystemHandler) PerformUpdate(c *gin.Context) {
 			release(releaseReason, succeeded)
 		}()
 
+		if managed != nil {
+			status, err := managed.PrepareManagedUpdate(ctx, operationID)
+			if err != nil {
+				releaseReason = "SYSTEM_UPDATE_FAILED"
+				return nil, err
+			}
+			succeeded = true
+			return gin.H{"message": status.Message, "need_restart": status.Phase == "ready", "operation_id": status.OperationID, "update_mode": "managed", "status": status}, nil
+		}
 		updateCtx, cancel := systemUpdateContext(ctx)
 		defer cancel()
 
@@ -201,9 +250,24 @@ func (h *SystemHandler) Rollback(c *gin.Context) {
 // RestartService restarts the systemd service
 // POST /api/v1/admin/system/restart
 func (h *SystemHandler) RestartService(c *gin.Context) {
+	var prepared struct {
+		OperationID string `json:"operation_id"`
+	}
+	managed := h.managedUpdater()
+	if managed != nil {
+		if err := c.ShouldBindJSON(&prepared); err != nil || prepared.OperationID == "" || len(prepared.OperationID) > 160 {
+			response.Error(c, http.StatusBadRequest, "A prepared update operation is required")
+			return
+		}
+	}
 	operationID := buildSystemOperationID(c, "restart")
-	payload := gin.H{"operation_id": operationID}
+	payload := gin.H{"operation_id": operationID, "prepared_operation_id": prepared.OperationID}
 	executeAdminIdempotentJSON(c, "admin.system.restart", payload, service.DefaultSystemOperationIdempotencyTTL(), func(ctx context.Context) (any, error) {
+		if managed != nil {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), managedSystemRequestTimeout)
+			defer cancel()
+		}
 		lock, release, err := h.acquireSystemLock(ctx, operationID)
 		if err != nil {
 			return nil, err
@@ -212,6 +276,14 @@ func (h *SystemHandler) RestartService(c *gin.Context) {
 		defer func() {
 			release("", succeeded)
 		}()
+		if managed != nil {
+			status, err := managed.ActivateManagedUpdate(ctx, prepared.OperationID)
+			if err != nil {
+				return nil, err
+			}
+			succeeded = true
+			return gin.H{"message": status.Message, "operation_id": status.OperationID, "update_mode": "managed", "status": status}, nil
+		}
 
 		// Schedule service restart in background after sending response
 		// This ensures the client receives the success response before the service restarts

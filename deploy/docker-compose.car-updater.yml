@@ -1,0 +1,12 @@
+# Explicitly combined with docker-compose.car.yml by upgrade_car.py.
+services:
+  sub2api:
+    environment:
+      UPDATE_MANAGED_SOCKET: /run/sub2api-car-updater/control.sock
+    volumes:
+      - type: bind
+        source: /run/sub2api-car-updater
+        target: /run/sub2api-car-updater
+        read_only: true
+        bind:
+          create_host_path: true

@@ -19,6 +19,25 @@ export default {
 
   // Version Badge
   version: {
+    checkFailed: '暂时无法确认最新版本',
+    managed: {
+      preparing: '正在准备更新',
+      preparingHint: '正在下载并校验更新包。当前服务继续运行，准备完成后可点击立即重启。',
+      ready: '更新已准备好',
+      readyHint: '点击立即重启后，将自动备份并切换到新版本。',
+      applying: '正在应用更新',
+      applyingHint: '正在备份、重启并检查新版本。连接可能短暂中断，请稍候。',
+      succeeded: '更新已完成',
+      succeededHint: '新版本已通过健康检查。',
+      failed: '更新未完成',
+      failedHint: '请检查错误信息后重试。',
+      rolled_back: '已恢复原版本',
+      rolled_backHint: '新版本未通过检查，已自动恢复原应用。',
+      manual_recovery_required: '需要手动恢复',
+      manual_recovery_requiredHint: '无法确认安全回退。备份已保留，请联系管理员检查服务器。',
+      reconnecting: '正在等待确认更新状态，请勿重复点击更新。',
+      connectionDelayed: '服务连接仍未恢复。请检查服务器上的更新服务和备份记录；页面会继续尝试连接，请勿重复更新或初始化。'
+    },
     currentVersion: '当前版本',
     latestVersion: '最新版本',
     upToDate: '已是最新版本',

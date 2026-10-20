@@ -25,9 +25,85 @@ Swap，并在上线后观察实际内存和并发。数据库和 Redis 只在 Do
 所有持久数据位于 `deploy/car-data/`。`.env` 保存固定的 JWT/TOTP 密钥及
 数据库凭据，必须随备份保管；不要重新运行初始化来解决启动错误。
 
-## 升级流程
+## 网页更新（首次启用后推荐）
 
-日常更新使用两个 Python 3 标准库脚本，不需要配置镜像仓库、访问令牌或定时任务。
+管理员在左上角版本菜单中点击刷新，检查 `CLccxx/sub2api-car` 的最新正式 Release。
+有新版本时点击「立即更新」，服务器会下载完整部署包、校验文件并准备镜像；
+当前应用继续运行。出现「更新已准备好」后点击「立即重启」，系统会先备份，
+再切换应用并验证运行版本和健康状态。页面在确认目标版本运行后自动刷新。
+准备完成后可以关闭页面或重新登录，状态保存在服务器上。
+
+检查更新使用 GitHub 的 latest Release，不是仓库的最新提交。`v0.2.17-car.7`
+这样的定制标签必须发布成正式版本（不能勾选 Pre-release 或保留为 Draft）。
+发布流程会先上传完整包和校验文件，再公开 Release 并标记为 Latest。
+仓库和 Release 需要可以公开读取；此更新服务不在应用内保存 GitHub 访问令牌。
+将私有仓库改成公开会同时公开源码和 Git 历史，应先确认其中没有私有文件或凭据。
+
+### 从已有 car.6 安装启用一次
+
+本节用于已部署且数据正常的 Ubuntu / Linux amd64、systemd、Docker Compose 安装。
+需要 Python 3.9 或更高版本，不需要重新初始化数据库或修改原有密钥。
+首次需要在服务器执行安装；之后常规版本更新只需点击网页按钮。
+
+从本仓库 `v0.2.17-car.7` Release 下载以下三个文件到同一目录（例如 `/home/ubuntu`）：
+
+- `sub2api-car-0.2.17-car.7-linux-amd64.tar.gz`
+- `sub2api-car-0.2.17-car.7-linux-amd64.tar.gz.sha256`
+- `install_car_web_update.py`
+
+执行：
+
+```bash
+sudo python3 -I -B /home/ubuntu/install_car_web_update.py /home/ubuntu/sub2api-car-0.2.17-car.7-linux-amd64.tar.gz
+```
+
+安装器使用新包中的校验器兼容旧安装，验证完整包后安装宿主机更新服务，
+为应用增加一个 Unix socket 挂载，并升级应用。原有 Compose、Caddy、`.env`
+的其他内容和持久数据继续保留。不要用旧的 `car.6` 校验器直接安装新增文件的网页更新包。
+
+宿主机更新服务名为 `sub2api-car-updater.service`，只监听本地 Unix socket，
+不开放新的网络端口。应用通过管理员接口请求更新；应用容器不挂载 Docker socket。
+Compose 附加文件为 `deploy/docker-compose.car-updater.yml`，启用后所有手动 Compose
+操作也要同时带上它：
+
+```bash
+cd /opt/sub2api-car/deploy
+sudo docker compose -f docker-compose.car.yml -f docker-compose.car-updater.yml ps
+sudo systemctl status sub2api-car-updater --no-pager
+```
+
+### 发布后续版本
+
+完成业务测试并提交代码后，先将已验证提交推送到本仓库默认分支 `main`，
+再为同一提交创建新的定制版本标签，例如：
+
+```bash
+git tag -a v0.2.17-car.8 -m "说明本次更新内容"
+git push origin v0.2.17-car.8
+```
+
+GitHub Actions 的 **Carpool release** 工作流绑定标签提交构建完整 Linux amd64 包，
+通过验证后发布正式 Release。继承的上游发布流程会跳过 `-car.N` 标签。
+发布失败时不会把不完整包标记为最新版；已创建的草稿可以保留检查，修复后使用新标签。
+不要重新指向、覆盖或复用已经发布的标签。
+
+### 网页更新异常
+
+准备失败不会切换应用。重启后新版本失败时，仅在数据库迁移清单和实际迁移记录
+都允许安全回退的情况下自动恢复原应用，并在页面显示恢复结果。
+不能确认安全回退时会保留备份并停止失败应用，不自动恢复数据库。
+此时网页也可能无法连接，长时间失联会提示检查服务器；它不会根据旧版本的健康
+响应或固定倒计时误报成功，也不会自动重复发起更新。
+
+先在服务器查看 `sudo systemctl status sub2api-car-updater --no-pager` 和
+`sudo journalctl -u sub2api-car-updater -n 50 --no-pager`。私有状态保存在
+`/var/lib/sub2api-car-updater/state.json`，网页更新备份位于
+`/opt/sub2api-car-backups/web-*/`。不要公开这些文件中的私有信息，也不要重新初始化。
+更新服务正常停止时会等待正在执行的事务结束，避免中断数据库备份或切换。
+
+## 手动打包与上传升级（备用方式）
+
+未启用网页更新时，可以使用两个 Python 3 标准库脚本，不需要配置镜像仓库、访问令牌或定时任务。
 合并上游和验证业务改动仍在本地完成；发布时再执行下面的打包和升级命令。
 
 ### 本地：一条命令打包

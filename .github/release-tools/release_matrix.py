@@ -51,6 +51,8 @@ def sha256(path):
 
 
 def plan(args):
+    if re.fullmatch(r'(?:refs/tags/)?v[0-9]+\.[0-9]+\.[0-9]+-car\.[0-9]+', args.ref):
+        raise ValueError('Custom tags must use the Carpool release workflow')
     sha = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
     if args.dry_run:
         version = VERSION_FILE.read_text().strip()

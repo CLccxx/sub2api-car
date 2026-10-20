@@ -19,6 +19,25 @@ export default {
 
   // Version Badge
   version: {
+    checkFailed: 'Unable to verify the latest version',
+    managed: {
+      preparing: 'Preparing update',
+      preparingHint: 'Downloading and verifying the release. The current service stays online until you choose Restart Now.',
+      ready: 'Update is ready',
+      readyHint: 'Restart Now will back up the installation and activate the new version.',
+      applying: 'Applying update',
+      applyingHint: 'Backing up, restarting and checking the new version. The connection may be interrupted briefly.',
+      succeeded: 'Update completed',
+      succeededHint: 'The new version passed its health check.',
+      failed: 'Update did not complete',
+      failedHint: 'Review the error before trying again.',
+      rolled_back: 'Previous version restored',
+      rolled_backHint: 'The new version failed its checks. The original application was restored automatically.',
+      manual_recovery_required: 'Manual recovery required',
+      manual_recovery_requiredHint: 'A safe rollback could not be confirmed. Backups are retained; contact the administrator to check the server.',
+      reconnecting: 'Waiting to confirm the update status. Please do not repeat the update.',
+      connectionDelayed: 'The service is still unavailable. Check the updater and backup records on the server. Reconnection will continue; do not repeat the update or initialize the installation.'
+    },
     currentVersion: 'Current Version',
     latestVersion: 'Latest Version',
     upToDate: "You're running the latest version.",

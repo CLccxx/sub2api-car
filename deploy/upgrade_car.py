@@ -41,8 +41,13 @@ REQUIRED_FILES = frozenset({
     "deploy/docker-compose.car.yml", "deploy/Caddyfile.car", "deploy/init-car.sh",
     "deploy/CARPOOL_DEPLOYMENT.md",
 })
-OPTIONAL_FILES = frozenset({"deploy/upgrade_car.py", "MIGRATIONS.json"})
-RETAINED_CONFIG = frozenset({"deploy/docker-compose.car.yml", "deploy/Caddyfile.car"})
+OPTIONAL_FILES = frozenset({
+    "deploy/upgrade_car.py", "MIGRATIONS.json", "deploy/car_release.py",
+    "deploy/car_update_service.py", "deploy/install_car_web_update.py",
+    "deploy/sub2api-car-updater.service", "deploy/docker-compose.car-updater.yml",
+})
+OPTIONAL_CONFIG = frozenset({"deploy/docker-compose.car-updater.yml"})
+RETAINED_CONFIG = frozenset({"deploy/docker-compose.car.yml", "deploy/Caddyfile.car"}) | OPTIONAL_CONFIG
 
 
 class UpgradeError(Exception):
@@ -250,6 +255,15 @@ class UpgradeConfig:
     backups_dir: Path = Path("/opt/sub2api-car-backups")
 
 
+@dataclass(frozen=True)
+class PreparedImage:
+    """Internal handoff from a verified preparation; never a CLI bypass flag."""
+    archive_sha256: str
+    version: str
+    commit: str
+    image_id: str
+
+
 @dataclass
 class UpgradeResult:
     version: str
@@ -368,6 +382,19 @@ def _atomic_file(target, source=None, data=None, mode=0o600, owner=None):
             os.unlink(temporary)
 
 
+class _HeldInstallationLock:
+    """An internal live lock handoff for bootstrap; never exposed as a CLI flag."""
+    def __init__(self, directory, fd):
+        self.directory, self.fd, self.active = directory, fd, True
+
+    def validate(self, directory):
+        if not self.active or self.directory != directory:
+            raise UpgradeError("The installation lock handoff is no longer valid.")
+        held, current = os.fstat(self.fd), (directory / ".upgrade-car.lock").lstat()
+        if (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino):
+            raise UpgradeError("The installation lock changed during bootstrap.")
+
+
 @contextlib.contextmanager
 def installation_lock(install_dir):
     """One stable lock per installation, regardless of the staging directory."""
@@ -386,7 +413,11 @@ def installation_lock(install_dir):
                 raise UpgradeError("There is another upgrade running for this installation.") from None
         except OSError:
             raise UpgradeError("Unable to acquire a safe installation lock.") from None
-        yield
+        guard = _HeldInstallationLock(install_dir, fd)
+        try:
+            yield guard
+        finally:
+            guard.active = False
     finally:
         if fd is not None:
             os.close(fd)
@@ -450,8 +481,12 @@ def _env_version(data, replacement=None):
 
 def _compose(config, *args, env_file=None):
     deploy = config.install_dir / "deploy"
-    return ["docker", "compose", "--project-directory", str(deploy), "--env-file",
-            str(env_file or deploy / ".env"), "-f", str(deploy / "docker-compose.car.yml")] + list(args)
+    command = ["docker", "compose", "--project-directory", str(deploy), "--env-file",
+               str(env_file or deploy / ".env"), "-f", str(deploy / "docker-compose.car.yml")]
+    overlay = _target(config.install_dir, "deploy/docker-compose.car-updater.yml")
+    if overlay.exists():
+        command.extend(["-f", str(overlay)])
+    return command + list(args)
 
 
 def _version_output(result):
@@ -576,11 +611,14 @@ def _backup(config, runner, managed, old, bundle, snapshot, eligible):
     return backup, state
 
 
-def _app_up(config, runner, validate=True):
+def _app_up(config, runner, validate=True, reconfigure=False):
     if validate:
         _run(runner, _compose(config, "config", "--quiet"), "Validate active Compose configuration")
+    # A replaced host bind directory leaves the Compose config hash unchanged.
+    # Internal bootstrap repair must retire that existing container explicitly.
+    recreate = ["--force-recreate"] if reconfigure else []
     _run(runner, _compose(config, "up", "-d", "--no-deps", "--no-build", "--pull", "never", "--timeout", "30",
-                         "--wait", "--wait-timeout", "120", "sub2api"), "Start app", timeout=210)
+                         *recreate, "--wait", "--wait-timeout", "120", "sub2api"), "Start app", timeout=210)
 
 
 def _stop_app(config, runner):
@@ -602,7 +640,24 @@ def _restore_managed(config, backup, state):
             _atomic_file(target, source=backup / "files" / name, mode=metadata["mode"], owner=(metadata["uid"], metadata["gid"]))
 
 
-def upgrade(archive, config=None, sha256=None, runner=None, report=print):
+def _verify_image(runner, bundle, prepared_image=None):
+    """Verify the mutable tag and then inspect the immutable image contents."""
+    image_tag = "sub2api-car:" + bundle.version
+    image_result = _run(runner, ["docker", "image", "inspect", "--format", "{{.Id}}", image_tag], "Inspect new image")
+    image_id = image_result.stdout.decode("ascii").strip()
+    if not re.fullmatch(r"sha256:[a-f0-9]{64}", image_id):
+        raise UpgradeError("Cannot identify the newly built image.")
+    if prepared_image is not None and image_id != prepared_image.image_id:
+        raise UpgradeError("Prepared image tag no longer identifies the verified image.")
+    image_version = _version_output(_run(runner, ["docker", "run", "--rm", "--network", "none", "--read-only",
+                                                                 "--entrypoint", "/app/sub2api", image_id, "--version"], "Verify new image", timeout=60))
+    if image_version != (bundle.version, bundle.commit):
+        raise UpgradeError("Built image version or commit does not match the verified bundle.")
+    return image_id
+
+
+def upgrade(archive, config=None, sha256=None, runner=None, report=print, prepared_image=None,
+            reconfigure=False, _lock=None):
     """Core transaction; CLI enforces root, while tests inject a command runner."""
     config = config or UpgradeConfig()
     config = UpgradeConfig(*(Path(os.path.abspath(p)) for p in (config.install_dir, config.updates_dir, config.backups_dir)))
@@ -613,8 +668,19 @@ def upgrade(archive, config=None, sha256=None, runner=None, report=print):
                 raise UpgradeError("Installation, staging, and backup directories must not overlap.")
     runner = runner or SubprocessRunner()
     stage, release, bundle = _stage_archive(archive, sha256, config.updates_dir)
+    if prepared_image is not None:
+        if (not isinstance(prepared_image, PreparedImage)
+                or (prepared_image.archive_sha256, prepared_image.version, prepared_image.commit)
+                    != (bundle.sha256, bundle.version, bundle.commit)
+                or not isinstance(prepared_image.image_id, str)
+                or not re.fullmatch(r"sha256:[a-f0-9]{64}", prepared_image.image_id)):
+            raise UpgradeError("Prepared image metadata does not match the verified bundle.")
     report("Verified private bundle {} (commit {}); staging: {}".format(bundle.version, bundle.commit, stage))
-    with installation_lock(config.install_dir):
+    if _lock is not None:
+        if not isinstance(_lock, _HeldInstallationLock):
+            raise UpgradeError("Invalid installation lock handoff.")
+        _lock.validate(config.install_dir)
+    with (installation_lock(config.install_dir) if _lock is None else contextlib.nullcontext(_lock)):
         _safe_directory(config.install_dir / "deploy")
         env_path = config.install_dir / "deploy/.env"
         with _open_regular(env_path) as handle:
@@ -625,36 +691,49 @@ def upgrade(archive, config=None, sha256=None, runner=None, report=print):
         if len(original_env) > MAX_METADATA_BYTES:
             raise UpgradeError("The persistent .env is unexpectedly large.")
         old_env_version, candidate_env = _env_version(original_env, bundle.version)
-        for name in RETAINED_CONFIG | {"sub2api", "BUILD_VERSION", "BUILD_COMMIT"}:
+        for name in (RETAINED_CONFIG - OPTIONAL_CONFIG) | {"sub2api", "BUILD_VERSION", "BUILD_COMMIT"}:
             if not _target(config.install_dir, name).exists():
                 raise UpgradeError("The existing installation is missing a required managed file.")
+        for name in OPTIONAL_CONFIG:
+            _target(config.install_dir, name)
         managed = _collect_managed(config.install_dir, bundle)
         old = _running_app(config, runner)
         if old["version"] != old_env_version:
             raise UpgradeError("The running version and persistent .env disagree; reconcile them before upgrading.")
+        if prepared_image is not None:
+            # Check under the installation lock, not only in the web service:
+            # a manual upgrade may have advanced the app since preparation.
+            def version_order(value):
+                core, car = value.split("-car.")
+                return tuple(int(part) for part in core.split(".")) + (int(car),)
+            if version_order(old["version"]) > version_order(bundle.version):
+                raise UpgradeError("The prepared version is older than the running application.")
+            if old["version"] == bundle.version and old["image_id"] != prepared_image.image_id:
+                raise UpgradeError("The running version does not use the prepared image identity.")
+            report("Revalidating the previously prepared app image before any no-op or activation.")
+            image_id = _verify_image(runner, bundle, prepared_image)
         if old["version"] == bundle.version:
             if old["commit"] != bundle.commit:
                 raise UpgradeError("Refusing to reuse the running version tag for a different commit.")
             if not old["healthy"]:
                 raise UpgradeError("This version is already running but is unhealthy; no files were changed.")
-            report("This exact version and commit are already running and healthy; no upgrade needed.")
-            return UpgradeResult(bundle.version, bundle.commit, None, stage, True)
+            if not reconfigure:
+                report("This exact version and commit are already running and healthy; no upgrade needed.")
+                return UpgradeResult(bundle.version, bundle.commit, None, stage, True)
         snapshot = _migration_snapshot(config, runner)
         eligible = (bundle.migrations is not None and snapshot is not None
                     and all(snapshot.get(name) == digest for name, digest in bundle.migrations.items()))
         if not eligible:
             report("Migration preflight is pending, changed, or unknown; automatic application rollback is disabled.")
-        report("Building and verifying the new app image while the current app keeps running.")
         image_tag = "sub2api-car:" + bundle.version
-        _run(runner, ["docker", "build", "-f", "Dockerfile.goreleaser", "-t", image_tag, "."], "Image build", cwd=release, timeout=1800)
-        image_result = _run(runner, ["docker", "image", "inspect", "--format", "{{.Id}}", image_tag], "Inspect new image")
-        image_id = image_result.stdout.decode("ascii").strip()
-        if not re.fullmatch(r"sha256:[a-f0-9]{64}", image_id):
-            raise UpgradeError("Cannot identify the newly built image.")
-        image_version = _version_output(_run(runner, ["docker", "run", "--rm", "--network", "none", "--read-only",
-                                                                     "--entrypoint", "/app/sub2api", image_id, "--version"], "Verify new image", timeout=60))
-        if image_version != (bundle.version, bundle.commit):
-            raise UpgradeError("Built image version or commit does not match the verified bundle.")
+        if prepared_image is None and old["version"] == bundle.version:
+            image_id = _verify_image(runner, bundle)
+            if image_id != old["image_id"]:
+                raise UpgradeError("The running version's image tag changed before reconfiguration.")
+        elif prepared_image is None:
+            report("Building and verifying the new app image while the current app keeps running.")
+            _run(runner, ["docker", "build", "-f", "Dockerfile.goreleaser", "-t", image_tag, "."], "Image build", cwd=release, timeout=1800)
+            image_id = _verify_image(runner, bundle)
         candidate_path = stage / "candidate.env"
         _atomic_file(candidate_path, data=candidate_env)
         _run(runner, _compose(config, "config", "--quiet", env_file=candidate_path), "Validate candidate Compose configuration")
@@ -690,7 +769,7 @@ def upgrade(archive, config=None, sha256=None, runner=None, report=print):
             _atomic_file(env_path, data=candidate_env, mode=stat.S_IMODE(env_info.st_mode), owner=(env_info.st_uid, env_info.st_gid))
             _run(runner, _compose(config, "config", "--quiet"), "Validate active Compose configuration")
             attempted_start = True
-            _app_up(config, runner, validate=False)
+            _app_up(config, runner, validate=False, reconfigure=reconfigure)
             running = _running_app(config, runner)
             if ((running["version"], running["commit"], running["image_id"]) != (bundle.version, bundle.commit, image_id)
                     or not running["healthy"]):
@@ -716,7 +795,7 @@ def upgrade(archive, config=None, sha256=None, runner=None, report=print):
                     _restore_managed(config, backup, state)
                     if attempted_start:
                         _run(runner, ["docker", "tag", old["image_id"], old["image_tag"]], "Restore previous image tag")
-                        _app_up(config, runner)
+                        _app_up(config, runner, reconfigure=reconfigure)
                     restored = _running_app(config, runner)
                     if ((attempted_start and not restored["healthy"])
                             or any(restored[key] != old[key] for key in ("version", "commit", "image_id"))):

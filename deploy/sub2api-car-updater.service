@@ -1,0 +1,24 @@
+# Installed by install_car_web_update.py. Compatible operator settings are retained.
+[Unit]
+Description=Sub2API car release updater
+Requires=docker.service
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/bin/python3 /opt/sub2api-car/deploy/car_update_service.py --install-dir /opt/sub2api-car --updates-dir /opt/sub2api-car-updates --backups-dir /opt/sub2api-car-backups --state-dir /var/lib/sub2api-car-updater --socket /run/sub2api-car-updater/control.sock --app-uid 1000 --app-gid 1000
+Restart=always
+RestartSec=3
+KillMode=mixed
+TimeoutStopSec=infinity
+NoNewPrivileges=yes
+ProtectSystem=full
+# The daemon creates its socket directory and never removes it on stop. Do not
+# add directory cleanup: Docker's directory bind mount must keep the same inode.
+
+[Install]
+WantedBy=multi-user.target

@@ -10,7 +10,7 @@
             ? 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:hover:bg-amber-900/50'
             : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-800 dark:text-dark-400 dark:hover:bg-dark-700'
         ]"
-        :title="hasUpdate ? t('version.updateAvailable') : t('version.upToDate')"
+        :title="versionWarning ? t('version.checkFailed') : hasUpdate ? t('version.updateAvailable') : t('version.upToDate')"
       >
         <span v-if="currentVersion" class="font-medium">v{{ currentVersion }}</span>
         <span
@@ -89,7 +89,7 @@
                   <span v-else class="text-2xl font-bold text-gray-400 dark:text-dark-500">--</span>
                   <!-- Show check mark when up to date -->
                   <span
-                    v-if="!hasUpdate"
+                    v-if="!hasUpdate && !versionWarning && !managedBusy"
                     class="flex h-5 w-5 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30"
                   >
                     <svg
@@ -107,7 +107,9 @@
                 </div>
                 <p class="mt-1 text-xs text-gray-500 dark:text-dark-400">
                   {{
-                    hasUpdate
+                    versionWarning
+                      ? t('version.checkFailed')
+                      : hasUpdate
                       ? t('version.latestVersion') + ': v' + latestVersion
                       : t('version.upToDate')
                   }}
@@ -115,7 +117,20 @@
               </div>
 
               <!-- Priority 1: Update error (must check before hasUpdate) -->
-              <div v-if="updateError" class="space-y-2">
+              <ManagedUpdatePanel
+                v-if="isManaged"
+                :status="managedStatus"
+                :busy="managedBusy"
+                :error="managedError"
+                :reconnecting="managedReconnecting"
+                :connection-delayed="managedConnectionDelayed"
+                :warning="versionWarning"
+                :has-update="hasUpdate"
+                :release-url="managedReleaseURL"
+                @prepare="prepareManagedUpdate"
+                @activate="activateManagedUpdate"
+              />
+              <div v-else-if="updateError" class="space-y-2">
                 <div
                   class="flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-800/50 dark:bg-red-900/20"
                 >
@@ -650,8 +665,9 @@ import {
 } from '@/api/admin/system'
 import { useClipboard } from '@/composables/useClipboard'
 import Icon from '@/components/icons/Icon.vue'
+import ManagedUpdatePanel from '@/components/common/ManagedUpdatePanel.vue'
+import { useManagedUpdate } from '@/composables/useManagedUpdate'
 
-const GITHUB_REPO = 'Wei-Shaw/sub2api'
 // Docker Hub image published by CI (tags carry no "v" prefix, e.g. weishaw/sub2api:0.1.146)
 const DOCKER_IMAGE = 'weishaw/sub2api'
 
@@ -676,6 +692,21 @@ const latestVersion = computed(() => appStore.latestVersion)
 const hasUpdate = computed(() => appStore.hasUpdate)
 const releaseInfo = computed(() => appStore.releaseInfo)
 const buildType = computed(() => appStore.buildType)
+const versionWarning = computed(() => appStore.versionWarning)
+const isManaged = computed(() => appStore.updateMode === 'managed' || /^v?\d+\.\d+\.\d+-car\.\d+$/.test(currentVersion.value))
+const repository = computed(() => appStore.updateRepository || (isManaged.value ? 'CLccxx/sub2api-car' : 'Wei-Shaw/sub2api'))
+const managedReleaseURL = computed(() => releaseInfo.value?.html_url || `https://github.com/${repository.value}/releases/latest`)
+const managedEnabled = computed(() => isAdmin.value && isManaged.value)
+const {
+  status: managedStatus,
+  busy: managedBusy,
+  error: managedError,
+  reconnecting: managedReconnecting,
+  connectionDelayed: managedConnectionDelayed,
+  refresh: refreshManagedStatus,
+  prepare: prepareManagedUpdate,
+  activate: activateManagedUpdate
+} = useManagedUpdate(managedEnabled, dropdownOpen, currentVersion)
 
 // Update process states (local to this component)
 const updating = ref(false)
@@ -710,7 +741,7 @@ const manualTabs = computed(() => [
 const scriptRollbackCommand = computed(() => {
   if (!selectedRollbackVersion.value) return ''
   const tag = `v${selectedRollbackVersion.value}`
-  return `curl -sSL https://raw.githubusercontent.com/${GITHUB_REPO}/${tag}/deploy/install.sh | sudo bash -s -- rollback ${tag}`
+  return `curl -sSL https://raw.githubusercontent.com/${repository.value}/${tag}/deploy/install.sh | sudo bash -s -- rollback ${tag}`
 })
 
 const dockerRollbackCommand = computed(() => {
@@ -749,6 +780,7 @@ async function refreshVersion(force = true) {
   resetRollbackState()
 
   await appStore.fetchVersion(force)
+  if (isManaged.value) await refreshManagedStatus()
 }
 
 async function handleUpdate() {
