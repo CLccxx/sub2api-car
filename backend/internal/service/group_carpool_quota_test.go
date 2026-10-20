@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -20,18 +21,40 @@ func TestCarpoolWeeklyLimit(t *testing.T) {
 		ok       bool
 	}{
 		{1374.65, 4, 350, true}, {1374.65, 3, 466.66, true}, {1600, 5, 320, true},
-		{1399.99, 4, 350, true}, {1400, 4, 350, true}, {150, 4, 37.5, true},
-		{520, 4, 137.5, true}, {560, 4, 150, true}, {550, 4, 137.5, true},
-		{600, 4, 150, true}, {550.5, 4, 150, true}, {550, 3, 183.33, true},
-		{520, 2, 275, true}, {49.99, 4, 12.5, true}, {50, 4, 12.5, true},
-		{50.01, 4, 25, true}, {99.99, 4, 25, true}, {100, 4, 25, true},
-		{9.99, 4, 0, false}, {10, 4, 12.5, true}, {19.99, 4, 12.5, true}, {20, 4, 12.5, true},
+		{1399.99, 4, 350, true}, {1400, 4, 350, true}, {150, 4, 200, true},
+		{520, 4, 200, true}, {560, 4, 200, true}, {550, 4, 200, true},
+		{600, 4, 200, true}, {550.5, 4, 200, true}, {550, 3, 200, true},
+		{520, 2, 275, true}, {49.99, 4, 200, true}, {50, 4, 200, true},
+		{50.01, 4, 200, true}, {99.99, 4, 200, true}, {100, 4, 200, true},
+		{9.99, 4, 200, true}, {10, 4, 200, true}, {19.99, 4, 200, true}, {20, 4, 200, true},
 		{0, 4, 0, false}, {-100, 4, 0, false}, {math.NaN(), 4, 0, false},
-		{math.Inf(1), 4, 0, false}, {1000, 0, 0, false}, {1000, 6, 0, false},
+		{math.Inf(1), 4, 0, false}, {math.Inf(-1), 4, 0, false}, {1e10, 5, 2e9, true}, {1e10 + 1, 4, 0, false},
+		{1000, -1, 0, false}, {1000, 0, 0, false}, {1000, 1, 0, false}, {1000, 6, 0, false},
 	} {
 		got, ok := carpoolWeeklyLimit(test.estimate, test.members)
 		require.Equal(t, test.ok, ok)
 		require.Equal(t, test.expected, got)
+	}
+}
+
+func TestCarpoolWeeklyLimitPerPersonFloor(t *testing.T) {
+	for _, test := range []struct {
+		members    int
+		aboveFloor float64
+	}{{2, 225}, {3, 216.66}, {4, 212.5}, {5, 210}} {
+		t.Run(fmt.Sprintf("%d members", test.members), func(t *testing.T) {
+			totalAtFloor := 200.0 * float64(test.members)
+			for _, estimate := range []float64{5.33, math.SmallestNonzeroFloat64, totalAtFloor - 0.01, totalAtFloor} {
+				t.Run(fmt.Sprintf("estimate %g", estimate), func(t *testing.T) {
+					limit, ok := carpoolWeeklyLimit(estimate, test.members)
+					require.True(t, ok)
+					require.Equal(t, 200.0, limit)
+				})
+			}
+			limit, ok := carpoolWeeklyLimit(totalAtFloor+0.01, test.members)
+			require.True(t, ok)
+			require.Equal(t, test.aboveFloor, limit)
+		})
 	}
 }
 
@@ -57,6 +80,7 @@ type carpoolRepoStub struct {
 	applied     bool
 	writes      int
 	limit       float64
+	accountID   int64
 	listedSlot  time.Time
 	appliedSlot time.Time
 }
@@ -65,9 +89,10 @@ func (r *carpoolRepoStub) ListPending(_ context.Context, slot time.Time) ([]Carp
 	r.listedSlot = slot
 	return r.targets, r.err
 }
-func (r *carpoolRepoStub) Apply(_ context.Context, _ CarpoolQuotaTarget, _ *Account, limit float64, slot time.Time) (bool, error) {
+func (r *carpoolRepoStub) Apply(_ context.Context, _ CarpoolQuotaTarget, account *Account, limit float64, slot time.Time) (bool, error) {
 	r.writes++
 	r.limit = limit
+	r.accountID = account.ID
 	r.appliedSlot = slot
 	return r.applied, r.err
 }
@@ -101,11 +126,15 @@ func TestCarpoolQuotaRunHalfHourSlots(t *testing.T) {
 }
 
 type carpoolStats struct {
-	cost float64
-	err  error
+	cost        float64
+	err         error
+	accountID   int64
+	windowStart time.Time
 }
 
-func (s *carpoolStats) GetAccountWindowStats(context.Context, int64, time.Time) (*usagestats.AccountStats, error) {
+func (s *carpoolStats) GetAccountWindowStats(_ context.Context, accountID int64, start time.Time) (*usagestats.AccountStats, error) {
+	s.accountID = accountID
+	s.windowStart = start
 	return &usagestats.AccountStats{Cost: s.cost}, s.err
 }
 
@@ -156,13 +185,17 @@ func TestCarpoolQuotaRefresh(t *testing.T) {
 				accounts.accounts[0].Type = AccountTypeAPIKey
 			}
 			svc.run(context.Background())
-			if scenario == "success" || scenario == "conflict" {
+			switch scenario {
+			case "success", "conflict":
 				require.Equal(t, 1, repo.writes)
 				require.Equal(t, 350.0, repo.limit)
-			} else {
+			case "small":
+				require.Equal(t, 1, repo.writes)
+				require.Equal(t, 200.0, repo.limit)
+			default:
 				require.Zero(t, repo.writes)
 			}
-			if scenario == "success" {
+			if scenario == "success" || scenario == "small" {
 				require.Equal(t, []int64{10}, cache.ids)
 			} else {
 				require.Empty(t, cache.ids)
@@ -174,7 +207,7 @@ func TestCarpoolQuotaRefresh(t *testing.T) {
 func TestCarpoolQuotaRefreshRoundedLimitPreservesAvailableQuota(t *testing.T) {
 	_, _, accounts, quota, _, now := sharedUsageFixture(t)
 	quota.payload.RateLimit.SecondaryWindow.UsedPercent = 99
-	stats := &carpoolStats{cost: 552}
+	stats := &carpoolStats{cost: 1000}
 	repo := &carpoolRepoStub{targets: []CarpoolQuotaTarget{{GroupID: 10, Members: 4, Revision: *now}}, applied: true}
 	svc := NewCarpoolQuotaService(repo, accounts, quota, stats, nil)
 	svc.now = func() time.Time { return *now }
@@ -182,7 +215,37 @@ func TestCarpoolQuotaRefreshRoundedLimitPreservesAvailableQuota(t *testing.T) {
 	svc.run(context.Background())
 
 	require.Equal(t, 1, repo.writes)
-	require.Equal(t, 150.0, repo.limit)
-	sub := &UserSubscription{WeeklyUsageUSD: 138}
+	require.Equal(t, 262.5, repo.limit)
+	sub := &UserSubscription{WeeklyUsageUSD: 260}
 	require.True(t, sub.CheckWeeklyLimit(&Group{WeeklyLimitUSD: &repo.limit}, 0))
+}
+
+func TestCarpoolQuotaRefreshReconnectedAccountUsesPerPersonFloor(t *testing.T) {
+	_, _, accounts, quota, _, now := sharedUsageFixture(t)
+	accounts.accounts[0].ID = 42
+	window := quota.payload.RateLimit.SecondaryWindow
+	window.UsedPercent = 8
+	stats := &carpoolStats{cost: 5.33 * 0.08}
+	repo := &carpoolRepoStub{targets: []CarpoolQuotaTarget{{GroupID: 10, Members: 3, Revision: *now}}, applied: true}
+	cache := &carpoolCacheSpy{}
+	svc := NewCarpoolQuotaService(repo, accounts, quota, stats, cache)
+	svc.now = func() time.Time { return *now }
+
+	svc.run(context.Background())
+
+	require.Equal(t, 1, repo.writes)
+	require.Equal(t, 200.0, repo.limit)
+	require.Equal(t, int64(42), repo.accountID)
+	require.Equal(t, int64(42), stats.accountID)
+	require.Equal(t, time.Unix(window.ResetAt, 0).UTC().Add(-7*24*time.Hour), stats.windowStart)
+	require.Equal(t, []int64{10}, cache.ids)
+	view := querySharedAccountUsage(context.Background(), accounts.accounts[0].ID, quota, stats, svc.now).view
+	require.NotNil(t, view.SevenDay)
+	require.NotNil(t, view.SevenDay.EstimatedTotalCost)
+	require.InDelta(t, 5.33, *view.SevenDay.EstimatedTotalCost, 1e-9)
+	sub := &UserSubscription{WeeklyUsageUSD: 175}
+	group := &Group{WeeklyLimitUSD: &repo.limit}
+	require.True(t, sub.CheckWeeklyLimit(group, 25))
+	require.False(t, sub.CheckWeeklyLimit(group, 25.01))
+	require.Equal(t, 175.0, sub.WeeklyUsageUSD)
 }

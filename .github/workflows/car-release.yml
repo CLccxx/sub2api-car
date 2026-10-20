@@ -47,9 +47,9 @@ jobs:
           test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
       - name: Test upgrade, recovery and publication boundaries
         run: python -B -m unittest discover -s deploy/tests -p 'test_*car.py'
-      - name: Test application updater integration
+      - name: Test application services and updater integration
         working-directory: backend
-        run: go test -tags=unit ./internal/service ./internal/handler/admin ./internal/config -run 'TestCompareCustomReleaseVersions|TestUpdateService|TestCarUpdate|TestUnixManagedUpdater|TestSystemHandler|TestSystemManaged|TestLoadManagedUpdate' -count=1
+        run: go test -tags=unit ./internal/service ./internal/handler/admin ./internal/config -count=1
       - name: Check backend lint before publishing
         uses: golangci/golangci-lint-action@v9
         with:
