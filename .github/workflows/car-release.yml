@@ -50,6 +50,12 @@ jobs:
       - name: Test application updater integration
         working-directory: backend
         run: go test -tags=unit ./internal/service ./internal/handler/admin ./internal/config -run 'TestCompareCustomReleaseVersions|TestUpdateService|TestCarUpdate|TestUnixManagedUpdater|TestSystemHandler|TestSystemManaged|TestLoadManagedUpdate' -count=1
+      - name: Check backend lint before publishing
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.14.0
+          args: --timeout=30m
+          working-directory: backend
       - name: Test version panel state
         working-directory: frontend
         run: |

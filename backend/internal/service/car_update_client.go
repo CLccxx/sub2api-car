@@ -204,7 +204,7 @@ func (c *UnixManagedUpdater) request(ctx context.Context, method, path string, p
 	if err != nil {
 		return nil, ErrManagedUpdaterUnavailable
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 16385))
 	if err != nil || len(data) > 16384 {
 		return nil, ErrManagedUpdaterUnavailable
