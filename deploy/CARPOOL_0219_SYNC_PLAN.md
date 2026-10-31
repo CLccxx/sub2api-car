@@ -86,4 +86,29 @@ interrupt requests; zero downtime and uninterrupted streams are not promised.
 - Independent spec and code-quality reviews found no remaining issues. Added an
   online runbook link for deployment bundles without changing the archive format.
 
-No production changes, release publication, or remote push have been performed.
+The initial synchronization did not publish a release or change production.
+
+## Publication follow-up (2026-10-31)
+
+The user subsequently authorized a GitHub push and a `0.2.19` car release, with
+server migration deferred. Remote `main` and `custom` history was merged without
+rewriting it, retaining the Go 1.27.3 Dockerfiles and Ubuntu 24.04 Python 3.9 CI fix.
+
+The GitHub security scan identified newly published frontend advisories. Upgrade
+Vue I18n and its compiler together to 11.4.16 (the maintained, patched line),
+require Node >=22 and use Node 24 across all build/CI jobs. Override vulnerable
+`decode-uri-component` versions to >=0.5.1 and `follow-redirects` to >=1.16.2.
+No audit exceptions were added or relaxed. References:
+
+- https://github.com/advisories/GHSA-83rm-6c8r-g728
+- https://github.com/advisories/GHSA-qr28-fpjm-wq7f
+- https://github.com/advisories/GHSA-mrwp-f3q8-3g9p
+
+The srcdoc regression failed with the old dependency and passes with the patched
+version. Bilingual runtime interpolation works with both `Function` and `eval`
+blocked. Three payment-card assertions were updated from untranslated keys to
+actual text, matching the runtime JIT behavior. Under Node 24, all 3,167 frontend
+tests across 385 files, lint, typecheck, production build and the repository's
+audit-exception checker pass. Independent review found no remaining issues.
+Backend business code, SQL, authorization state and production remain untouched
+by these release-preparation changes.

@@ -154,7 +154,8 @@ GitHub Actions 的 **Carpool release** 工作流绑定标签提交构建完整 L
 
 ### 本地：一条命令打包
 
-需要 Python 3.9 或更高版本、Node.js 20、pnpm 9 或 10、Git，以及已经启动的 Docker。
+需要 Python 3.9 或更高版本、Node.js 22 或更高版本（推荐与 CI 一致使用 Node.js 24）、
+pnpm 9 或 10、Git，以及已经启动的 Docker。
 先完成相关业务测试、提交代码并推送，再在仓库根目录执行：
 
 ```bash
