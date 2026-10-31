@@ -1,5 +1,14 @@
 # 定制版部署与升级
 
+## 从官方版本迁入
+
+当前代码已同步官方 `v0.2.19`。已有官方 Docker 安装（包括 `0.2.18`）应先按
+[官方版迁移说明](CARPOOL_OFFICIAL_MIGRATION.md)核实并保留原数据库、Redis、
+应用文件、有效配置与登录密钥，再验证只替换应用容器的方案。
+下方首次安装步骤与 car 升级工具不适用于直接接管官方安装。
+部署包不附带该迁移文档，可在仓库查看
+[在线迁移说明](https://github.com/CLccxx/sub2api-car/blob/main/deploy/CARPOOL_OFFICIAL_MIGRATION.md)。
+
 这套配置适用于单台 2 核 / 2 GB Ubuntu 服务器。应用、PostgreSQL、Redis
 和 Caddy 的总容器内存上限约 1.47 GiB；应用连接池已缩小。应保留约 2 GB
 Swap，并在上线后观察实际内存和并发。数据库和 Redis 只在 Docker 网络内访问，
@@ -145,7 +154,8 @@ GitHub Actions 的 **Carpool release** 工作流绑定标签提交构建完整 L
 
 ### 本地：一条命令打包
 
-需要 Python 3.9 或更高版本、Node.js 20、pnpm 9 或 10、Git，以及已经启动的 Docker。
+需要 Python 3.9 或更高版本、Node.js 22 或更高版本（推荐与 CI 一致使用 Node.js 24）、
+pnpm 9 或 10、Git，以及已经启动的 Docker。
 先完成相关业务测试、提交代码并推送，再在仓库根目录执行：
 
 ```bash

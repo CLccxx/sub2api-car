@@ -9,7 +9,8 @@ permissions:
 
 jobs:
   car-update-tools:
-    runs-on: ubuntu-latest
+    # Ubuntu 26.04 runner images no longer ship Python 3.9, the minimum supported by deploy/*.py.
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         python-version: ['3.9', '3.12']
@@ -81,7 +82,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'pnpm'
           cache-dependency-path: frontend/pnpm-lock.yaml
       - name: Install frontend dependencies
