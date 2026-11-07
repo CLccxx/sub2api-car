@@ -15,7 +15,8 @@ export function applyCarpoolMembers(form: CarpoolForm, members: number) {
   form.description = `${members} 人均分额度`
   form.daily_limit_usd = null
   form.monthly_limit_usd = null
-  if (form.weekly_limit_usd == null || form.weekly_limit_usd === 0) {
-    form.weekly_limit_usd = Math.floor(160000 / members) / 100
+  if (form.weekly_limit_usd == null || form.weekly_limit_usd <= 0) {
+    // Match the backend's $1600 bootstrap estimate and $100 per-person bonus.
+    form.weekly_limit_usd = Math.floor(160000 / members) / 100 + 100
   }
 }

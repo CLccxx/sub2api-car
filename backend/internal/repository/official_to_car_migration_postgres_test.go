@@ -75,20 +75,31 @@ func officialToCarTestDB(t *testing.T) *sql.DB {
 }
 
 func TestOfficial018ToCar019PostgresPreservesData(t *testing.T) {
-	db := officialToCarTestDB(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-
 	// The merged tree retains official 0.2.18 SQL byte-for-byte. Only these
-	// four car migrations and two official 0.2.19 migrations were absent there.
-	pending := map[string]bool{
+	// car migrations and two official 0.2.19 migrations were absent there.
+	assertCarMigrationPreservesData(t, map[string]bool{
 		"237_custom_group_carpool.sql":          true,
 		"238_custom_carpool_reset_monitor.sql":  true,
 		"241_custom_quota_reset_operations.sql": true,
 		"242_custom_carpool_reset_voting.sql":   true,
 		"247_scoped_admin_api_keys.sql":         true,
 		"248_group_image_count_billing.sql":     true,
-	}
+		"249_custom_carpool_account_scope.sql":  true,
+	})
+}
+
+func TestCar019ToAccountScopedCarPostgresPreservesData(t *testing.T) {
+	assertCarMigrationPreservesData(t, map[string]bool{
+		"249_custom_carpool_account_scope.sql": true,
+	})
+}
+
+func assertCarMigrationPreservesData(t *testing.T, pending map[string]bool) {
+	t.Helper()
+	db := officialToCarTestDB(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
 	baseline := fstest.MapFS{}
 	files, err := fs.Glob(migrations.FS, "*.sql")
 	require.NoError(t, err)
@@ -103,7 +114,7 @@ func TestOfficial018ToCar019PostgresPreservesData(t *testing.T) {
 		_, err := migrations.FS.ReadFile(name)
 		require.NoError(t, err, "the upgrade must include %s", name)
 	}
-	require.NoError(t, applyMigrationsFS(ctx, db, baseline), "create official 0.2.18 schema from unmodified SQL")
+	require.NoError(t, applyMigrationsFS(ctx, db, baseline), "create previous schema from unmodified SQL")
 
 	// All credentials are inert fixtures. This test starts no application or
 	// background workers and cannot refresh an upstream OAuth token.

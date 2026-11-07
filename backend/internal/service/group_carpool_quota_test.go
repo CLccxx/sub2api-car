@@ -20,40 +20,40 @@ func TestCarpoolWeeklyLimit(t *testing.T) {
 		expected float64
 		ok       bool
 	}{
-		{1374.65, 4, 350, true}, {1374.65, 3, 466.66, true}, {1600, 5, 320, true},
-		{1399.99, 4, 350, true}, {1400, 4, 350, true}, {150, 4, 200, true},
-		{520, 4, 200, true}, {560, 4, 200, true}, {550, 4, 200, true},
-		{600, 4, 200, true}, {550.5, 4, 200, true}, {550, 3, 200, true},
-		{520, 2, 275, true}, {49.99, 4, 200, true}, {50, 4, 200, true},
-		{50.01, 4, 200, true}, {99.99, 4, 200, true}, {100, 4, 200, true},
-		{9.99, 4, 200, true}, {10, 4, 200, true}, {19.99, 4, 200, true}, {20, 4, 200, true},
+		{1374, 4, 445, true}, {1374, 5, 376, true},
+		{1374.65, 4, 445, true}, {1374.65, 3, 560, true}, {1600, 5, 420, true},
+		{1399.99, 4, 450, true}, {1400, 4, 450, true}, {150, 4, 137.5, true},
+		{520, 4, 230, true}, {560, 4, 240, true}, {550, 4, 237.5, true},
+		{600, 4, 250, true}, {550.5, 4, 240, true}, {550, 3, 283.33, true},
+		{520, 2, 360, true}, {49.99, 4, 112.5, true}, {50, 4, 112.5, true},
+		{50.01, 4, 115, true}, {99.99, 4, 125, true}, {100, 4, 125, true},
+		{9.99, 4, 102.5, true}, {10, 4, 102.5, true}, {19.99, 4, 105, true}, {20, 4, 105, true},
+		{math.Nextafter(10, 0), 4, 102.5, true}, {math.Nextafter(10, math.Inf(1)), 4, 105, true},
 		{0, 4, 0, false}, {-100, 4, 0, false}, {math.NaN(), 4, 0, false},
-		{math.Inf(1), 4, 0, false}, {math.Inf(-1), 4, 0, false}, {1e10, 5, 2e9, true}, {1e10 + 1, 4, 0, false},
+		{math.Inf(1), 4, 0, false}, {math.Inf(-1), 4, 0, false}, {1e10, 5, 2e9 + 100, true}, {1e10 + 1, 4, 0, false},
 		{1000, -1, 0, false}, {1000, 0, 0, false}, {1000, 1, 0, false}, {1000, 6, 0, false},
 	} {
-		got, ok := carpoolWeeklyLimit(test.estimate, test.members)
-		require.Equal(t, test.ok, ok)
-		require.Equal(t, test.expected, got)
+		t.Run(fmt.Sprintf("estimate %g members %d", test.estimate, test.members), func(t *testing.T) {
+			got, ok := carpoolWeeklyLimit(test.estimate, test.members)
+			require.Equal(t, test.ok, ok)
+			require.Equal(t, test.expected, got)
+		})
 	}
 }
 
-func TestCarpoolWeeklyLimitPerPersonFloor(t *testing.T) {
+func TestCarpoolWeeklyLimitAddsBonusWithoutMinimumFloor(t *testing.T) {
 	for _, test := range []struct {
-		members    int
-		aboveFloor float64
-	}{{2, 225}, {3, 216.66}, {4, 212.5}, {5, 210}} {
+		members  int
+		expected float64
+	}{{2, 105}, {3, 103.33}, {4, 102.5}, {5, 102}} {
 		t.Run(fmt.Sprintf("%d members", test.members), func(t *testing.T) {
-			totalAtFloor := 200.0 * float64(test.members)
-			for _, estimate := range []float64{5.33, math.SmallestNonzeroFloat64, totalAtFloor - 0.01, totalAtFloor} {
+			for _, estimate := range []float64{5.33, math.SmallestNonzeroFloat64, 10} {
 				t.Run(fmt.Sprintf("estimate %g", estimate), func(t *testing.T) {
 					limit, ok := carpoolWeeklyLimit(estimate, test.members)
 					require.True(t, ok)
-					require.Equal(t, 200.0, limit)
+					require.Equal(t, test.expected, limit)
 				})
 			}
-			limit, ok := carpoolWeeklyLimit(totalAtFloor+0.01, test.members)
-			require.True(t, ok)
-			require.Equal(t, test.aboveFloor, limit)
 		})
 	}
 }
@@ -188,10 +188,10 @@ func TestCarpoolQuotaRefresh(t *testing.T) {
 			switch scenario {
 			case "success", "conflict":
 				require.Equal(t, 1, repo.writes)
-				require.Equal(t, 350.0, repo.limit)
+				require.Equal(t, 445.0, repo.limit)
 			case "small":
 				require.Equal(t, 1, repo.writes)
-				require.Equal(t, 200.0, repo.limit)
+				require.Equal(t, 102.5, repo.limit)
 			default:
 				require.Zero(t, repo.writes)
 			}
@@ -215,12 +215,13 @@ func TestCarpoolQuotaRefreshRoundedLimitPreservesAvailableQuota(t *testing.T) {
 	svc.run(context.Background())
 
 	require.Equal(t, 1, repo.writes)
-	require.Equal(t, 262.5, repo.limit)
-	sub := &UserSubscription{WeeklyUsageUSD: 260}
+	require.Equal(t, 355.0, repo.limit)
+	sub := &UserSubscription{WeeklyUsageUSD: 354}
 	require.True(t, sub.CheckWeeklyLimit(&Group{WeeklyLimitUSD: &repo.limit}, 0))
+	require.Equal(t, 354.0, sub.WeeklyUsageUSD)
 }
 
-func TestCarpoolQuotaRefreshReconnectedAccountUsesPerPersonFloor(t *testing.T) {
+func TestCarpoolQuotaRefreshReconnectedAccountUsesBonusWithoutMinimumFloor(t *testing.T) {
 	_, _, accounts, quota, _, now := sharedUsageFixture(t)
 	accounts.accounts[0].ID = 42
 	window := quota.payload.RateLimit.SecondaryWindow
@@ -234,7 +235,7 @@ func TestCarpoolQuotaRefreshReconnectedAccountUsesPerPersonFloor(t *testing.T) {
 	svc.run(context.Background())
 
 	require.Equal(t, 1, repo.writes)
-	require.Equal(t, 200.0, repo.limit)
+	require.Equal(t, 103.33, repo.limit)
 	require.Equal(t, int64(42), repo.accountID)
 	require.Equal(t, int64(42), stats.accountID)
 	require.Equal(t, time.Unix(window.ResetAt, 0).UTC().Add(-7*24*time.Hour), stats.windowStart)
@@ -243,9 +244,12 @@ func TestCarpoolQuotaRefreshReconnectedAccountUsesPerPersonFloor(t *testing.T) {
 	require.NotNil(t, view.SevenDay)
 	require.NotNil(t, view.SevenDay.EstimatedTotalCost)
 	require.InDelta(t, 5.33, *view.SevenDay.EstimatedTotalCost, 1e-9)
-	sub := &UserSubscription{WeeklyUsageUSD: 175}
+	sub := &UserSubscription{WeeklyUsageUSD: 100}
 	group := &Group{WeeklyLimitUSD: &repo.limit}
-	require.True(t, sub.CheckWeeklyLimit(group, 25))
-	require.False(t, sub.CheckWeeklyLimit(group, 25.01))
-	require.Equal(t, 175.0, sub.WeeklyUsageUSD)
+	require.True(t, sub.CheckWeeklyLimit(group, 3.33))
+	require.False(t, sub.CheckWeeklyLimit(group, 3.34))
+	require.Equal(t, 100.0, sub.WeeklyUsageUSD)
+	sub.WeeklyUsageUSD = 175
+	require.False(t, sub.CheckWeeklyLimit(group, 0))
+	require.Equal(t, 175.0, sub.WeeklyUsageUSD, "a lower cap must not clear existing usage")
 }

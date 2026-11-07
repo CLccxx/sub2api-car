@@ -12,24 +12,36 @@ import (
 
 type resetMonitorRepoStub struct {
 	CarpoolResetMonitorRepository
-	source        *CarpoolResetSource
-	err           error
-	observations  int
-	clears        int
-	applies       int
-	pending       []int64
-	invalidations []CarpoolResetInvalidation
-	acks          int
-	applyErr      error
-	ackErr        error
+	sources          []CarpoolResetSource
+	observedAccounts []int64
+	source           *CarpoolResetSource
+	err              error
+	observations     int
+	clears           int
+	applies          int
+	pending          []int64
+	invalidations    []CarpoolResetInvalidation
+	acks             int
+	applyErr         error
+	ackErr           error
 }
 
+func (r *resetMonitorRepoStub) Sources(context.Context) ([]CarpoolResetSource, error) {
+	if r.sources != nil {
+		return r.sources, r.err
+	}
+	if r.source == nil {
+		return nil, r.err
+	}
+	return []CarpoolResetSource{*r.source}, r.err
+}
 func (r *resetMonitorRepoStub) Source(context.Context) (*CarpoolResetSource, error) {
 	return r.source, r.err
 }
 func (r *resetMonitorRepoStub) ClearBaseline(context.Context) error { r.clears++; return nil }
-func (r *resetMonitorRepoStub) Observe(context.Context, CarpoolResetSource, CarpoolResetObservation) (*CarpoolResetEvent, error) {
+func (r *resetMonitorRepoStub) Observe(_ context.Context, source CarpoolResetSource, _ CarpoolResetObservation) (*CarpoolResetEvent, error) {
 	r.observations++
+	r.observedAccounts = append(r.observedAccounts, source.AccountID)
 	return nil, nil
 }
 func (r *resetMonitorRepoStub) PendingEvents(context.Context) ([]int64, error) { return r.pending, nil }
@@ -200,4 +212,29 @@ func TestCarpoolResetMonitorLifecycleAndOverlap(t *testing.T) {
 	stopped.Stop()
 	stopped.Start()
 	require.Nil(t, stopped.cron)
+}
+
+type accountResetQuotaStub struct {
+	now      time.Time
+	accounts []int64
+}
+
+func (q *accountResetQuotaStub) QueryUsageReadOnly(_ context.Context, id int64) (*OpenAIQuotaUsage, error) {
+	q.accounts = append(q.accounts, id)
+	if id == 9 {
+		return nil, errors.New("first account unavailable")
+	}
+	return &OpenAIQuotaUsage{AccountID: "second", FetchedAt: q.now.Unix(), RateLimit: &OpenAIRateLimit{SecondaryWindow: &OpenAIRateLimitWindow{UsedPercent: 20, LimitWindowSeconds: 604800, ResetAt: q.now.Add(time.Hour).Unix()}}}, nil
+}
+func TestCarpoolResetMonitorIndependentAccountReads(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	r := &resetMonitorRepoStub{sources: []CarpoolResetSource{{AccountID: 9, UpstreamAccountID: "first"}, {AccountID: 8, UpstreamAccountID: "second"}}, pending: []int64{1}}
+	q := &accountResetQuotaStub{now: now}
+	monitor := NewCarpoolResetMonitorService(r, q, nil)
+	monitor.now = func() time.Time { return now }
+	defer monitor.Stop()
+	monitor.run(context.Background())
+	require.Equal(t, []int64{9, 8}, q.accounts)
+	require.Equal(t, []int64{8}, r.observedAccounts, "one failed account must not block another observation")
+	require.Equal(t, 1, r.applies, "pending confirmed work still applies after one failed query")
 }

@@ -86,28 +86,29 @@ func (s *CarpoolResetMonitorService) run(parent context.Context) {
 		return
 	}
 	s.drainInvalidations(ctx)
-	source, err := s.repo.Source(ctx)
+	sources, err := s.repo.Sources(ctx)
 	if err != nil {
 		logger.LegacyPrintf("service.carpool_reset", "resolve source failed: %v", err)
 		return
 	}
-	if source == nil {
+	if len(sources) == 0 {
 		if err := s.repo.ClearBaseline(ctx); err != nil {
 			logger.LegacyPrintf("service.carpool_reset", "clear baseline failed: %v", err)
 		}
-		return
 	}
-	readCtx, readDone := context.WithTimeout(ctx, 30*time.Second)
-	usage, err := s.quota.QueryUsageReadOnly(readCtx, source.AccountID)
-	readDone()
-	if err != nil {
-		logger.LegacyPrintf("service.carpool_reset", "account=%d usage query failed: %v", source.AccountID, err)
-	} else if observation, valid := ReadCarpoolResetObservation(usage, source.UpstreamAccountID, s.now()); valid {
-		event, err := s.repo.Observe(ctx, *source, observation)
+	for _, source := range sources {
+		readCtx, readDone := context.WithTimeout(ctx, 30*time.Second)
+		usage, err := s.quota.QueryUsageReadOnly(readCtx, source.AccountID)
+		readDone()
 		if err != nil {
-			logger.LegacyPrintf("service.carpool_reset", "account=%d observation failed: %v", source.AccountID, err)
-		} else if event != nil {
-			logger.LegacyPrintf("service.carpool_reset", "event=%d account=%d detected reason=%s", event.ID, source.AccountID, event.Reason)
+			logger.LegacyPrintf("service.carpool_reset", "account=%d usage query failed: %v", source.AccountID, err)
+		} else if observation, valid := ReadCarpoolResetObservation(usage, source.UpstreamAccountID, s.now()); valid {
+			event, err := s.repo.Observe(ctx, source, observation)
+			if err != nil {
+				logger.LegacyPrintf("service.carpool_reset", "account=%d observation failed: %v", source.AccountID, err)
+			} else if event != nil {
+				logger.LegacyPrintf("service.carpool_reset", "event=%d account=%d detected reason=%s", event.ID, source.AccountID, event.Reason)
+			}
 		}
 	}
 	// Confirmed events survive a transient upstream failure; ApplyEvent rechecks

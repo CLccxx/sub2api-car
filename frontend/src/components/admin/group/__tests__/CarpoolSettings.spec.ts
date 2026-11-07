@@ -10,10 +10,10 @@ function form(limit: number | null = null) {
 }
 
 describe('carpool settings', () => {
-  it.each([null, 0])('fills only missing/zero caps (%s)', (limit) => {
+  it.each([null, 0, -10])('initializes missing/nonpositive caps (%s)', (limit) => {
     const state = form(limit)
     applyCarpoolMembers(state, 4)
-    expect(state).toMatchObject({ carpool_members: 4, name: '4 人车分组', description: '4 人均分额度', daily_limit_usd: null, monthly_limit_usd: null, weekly_limit_usd: 400 })
+    expect(state).toMatchObject({ carpool_members: 4, name: '4 人车分组', description: '4 人均分额度', daily_limit_usd: null, monthly_limit_usd: null, weekly_limit_usd: 500 })
   })
   it('keeps the existing cap on enable, reopen and size change', () => {
     const state = form(325)
@@ -23,10 +23,16 @@ describe('carpool settings', () => {
     expect(state.weekly_limit_usd).toBe(325)
     expect(state.name).toBe('3 人车分组')
   })
-  it('rounds fractional defaults down to cents', () => {
+  it.each([[2, 900], [3, 633.33], [4, 500], [5, 420]])('uses the backend 1600 estimate default for %i members', (members, expected) => {
     const state = form()
-    applyCarpoolMembers(state, 3)
-    expect(state.weekly_limit_usd).toBe(533.33)
+    applyCarpoolMembers(state, members)
+    expect(state.weekly_limit_usd).toBe(expected)
+  })
+  it.each([-1, 1, 6, 2.5, NaN, Infinity])('ignores an invalid member count %s', (members) => {
+    const state = form()
+    const original = { ...state }
+    applyCarpoolMembers(state, members)
+    expect(state).toEqual(original)
   })
   it('disables without destroying the cap', () => {
     const state = form(325)

@@ -1,5 +1,7 @@
 # Carpool weekly quota floor implementation plan
 
+This historical plan is superseded by [the account-scope and quota plan](CARPOOL_ACCOUNT_SCOPE_PLAN.md) as of 2026-11-07. The current formula rounds the total up to $10, divides by members, floors to cents and adds $100; it has no $200 minimum.
+
 **Goal:** A valid low estimate after deleting and reconnecting an account must never reduce an automatically calculated per-person weekly carpool cap below $200.
 
 **Design:** Keep the existing calculation order: round the shared estimated total up to the next $50, divide by 2–5 members, round down to cents, then apply a $200 per-person minimum. Replace the old $10 estimate cutoff with a strictly positive estimate check so the reported $5.33 case receives the floor. Zero, negative, missing, stale, nonfinite and excessive estimates retain the existing skip behavior. Keep the 30-minute Shanghai schedule, account eligibility checks, cache invalidation, usage counters, reset windows and raw shared-account estimate unchanged. No schema, infrastructure or UI changes are required. The user has authorized this policy and direct release publication after verification.

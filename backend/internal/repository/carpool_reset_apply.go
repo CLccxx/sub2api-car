@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
@@ -31,9 +32,9 @@ func (r *carpoolResetMonitorRepository) ApplyEvent(ctx context.Context, eventID 
 	event := &service.CarpoolResetEvent{ID: eventID}
 	var expected service.CarpoolResetSource
 	var expires time.Time
-	err = tx.QueryRowContext(ctx, `SELECT status,reason,group_id,account_id,identity_hash,expires_at,reset_count,skipped_count,source_revision
+	err = tx.QueryRowContext(ctx, `SELECT status,reason,group_id,account_id,identity_hash,expires_at,reset_count,skipped_count,source_revision,scope_version
 		FROM carpool_subscription_reset_events WHERE id=$1 FOR UPDATE`, eventID).
-		Scan(&event.Status, &event.Reason, &expected.GroupID, &expected.AccountID, &expected.IdentityHash, &expires, &event.ResetCount, &event.SkippedCount, &expected.Revision)
+		Scan(&event.Status, &event.Reason, &expected.GroupID, &expected.AccountID, &expected.IdentityHash, &expires, &event.ResetCount, &event.SkippedCount, &expected.Revision, &expected.ScopeVersion)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -61,11 +62,20 @@ func (r *carpoolResetMonitorRepository) ApplyEvent(ctx context.Context, eventID 
 		now = effectiveNow
 		dailyStart = timezone.StartOfDay(now)
 	}
-	current, err := carpoolResetSource(ctx, tx)
+	current, err := carpoolResetSourceForAccount(ctx, tx, expected.AccountID)
 	if err != nil {
 		return nil, err
 	}
-	if event.Reason != "vote" && (!sameCarpoolResetSource(current, &expected) || !expires.After(now)) {
+	var globalRevision int64
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM carpool_reset_source_changes`).Scan(&globalRevision); err != nil {
+		return nil, err
+	}
+	sourceMatches := sameCarpoolResetSource(current, &expected)
+	accountMatches := current != nil && current.IdentityHash == expected.IdentityHash
+	if expected.ScopeVersion == 0 {
+		sourceMatches = accountMatches && expected.Revision == globalRevision
+	}
+	if event.Reason != "vote" && (!sourceMatches || !expires.After(now)) {
 		why := "source_changed"
 		if !expires.After(now) {
 			why = "expired"
@@ -80,13 +90,17 @@ func (r *carpoolResetMonitorRepository) ApplyEvent(ctx context.Context, eventID 
 		result, err := tx.ExecContext(ctx, `WITH eligible AS MATERIALIZED (
 			SELECT s.id FROM carpool_subscription_reset_targets t JOIN user_subscriptions s ON s.id=t.subscription_id
 			WHERE t.event_id=$1 AND s.user_id=t.user_id AND s.group_id=t.group_id AND s.starts_at=t.starts_at
-			AND s.deleted_at IS NULL AND s.status='active' AND s.expires_at>$2 ORDER BY s.id FOR UPDATE OF s
+			AND s.deleted_at IS NULL AND s.status='active' AND s.starts_at<=$2 AND s.expires_at>$2
+ AND $5::boolean AND s.group_id IN (`+strings.ReplaceAll(carpoolAccountSubscriptionGroups, "$1", "$4")+`)
+ AND ((t.binding_revision IS NOT NULL AND t.binding_revision=(SELECT count(*) FROM carpool_reset_group_changes c WHERE c.group_id=t.group_id))
+ OR (t.binding_revision IS NULL AND t.group_id=$6 AND $7::boolean))
+ ORDER BY s.id FOR UPDATE OF s
 		), changed AS (
 			UPDATE user_subscriptions s SET daily_usage_usd=0,weekly_usage_usd=0,monthly_usage_usd=0,
 			daily_window_start=$3,weekly_window_start=$2,monthly_window_start=$2,updated_at=$2
 			FROM eligible e WHERE s.id=e.id RETURNING s.id
 		) UPDATE carpool_subscription_reset_targets SET reset_applied=TRUE
-		WHERE event_id=$1 AND subscription_id IN (SELECT id FROM changed)`, eventID, now, dailyStart)
+		WHERE event_id=$1 AND subscription_id IN (SELECT id FROM changed)`, eventID, now, dailyStart, expected.AccountID, accountMatches, expected.GroupID, expected.ScopeVersion == 0 && expected.Revision == globalRevision)
 		if err != nil {
 			return nil, err
 		}

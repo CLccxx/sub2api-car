@@ -1,16 +1,17 @@
 # Carpool Subscription Reset Monitor
 
-The server checks the shared OpenAI/Codex account every ten minutes, at minutes
+The server checks eligible shared OpenAI/Codex accounts every ten minutes, at minutes
 00, 10, 20, 30, 40 and 50 in Asia/Shanghai. It also observes once on startup.
 No browser session or external cron job is required.
 
 ## Activation
 
-Exactly one active OpenAI subscription group must have `carpool_members` set to
-2-5. That group must bind exactly one non-deleted, active, non-shadow OpenAI
-OAuth account with a `chatgpt_account_id`. Auto-paused expired accounts are not
-eligible. An ambiguous or unavailable source disables detection and cancels
-pending events after transactional revalidation.
+Each active OpenAI subscription group must bind exactly one non-deleted,
+active, non-shadow OpenAI OAuth account with a `chatgpt_account_id` for monitoring.
+The carpool quota switch is independent of monitoring. Ordinary subscription
+groups and multiple carpool tiers can share that account; the monitor observes it once per pass.
+Separate accounts have independent persisted baselines. Auto-paused expired
+accounts and ambiguous bindings are excluded from source selection.
 
 The first valid observation of a new source only establishes its baseline.
 The baseline persists across server restarts. Source changes invalidate older
@@ -43,11 +44,14 @@ upstream consume into an error or trigger another consume.
 
 ## Subscription Effects
 
-Each event captures all globally active, unexpired, non-deleted subscriptions,
-across groups and pages. Execution rechecks identity, status, expiry and the
-subscription term start. Revoked, expired, deleted, reassigned or renewed terms
-are skipped. New subscriptions created after capture are not added retroactively.
-Extending an existing active term without replacing its start keeps it eligible.
+Each event captures started, active, unexpired, non-deleted subscriptions in
+subscription groups bound to its upstream account, including ordinary
+subscription groups with carpool disabled. Standard/balance groups are excluded.
+Execution rechecks the account binding, group type, binding generation, identity,
+status, expiry and subscription term start. Revoked, expired, deleted, rebound,
+reassigned or renewed terms are skipped. New subscriptions created after capture
+are not added retroactively. Extending an existing active term without replacing
+its start keeps it eligible.
 
 Application is a single transaction with the same field semantics as resetting
 all three quota windows manually:
@@ -77,19 +81,28 @@ target rows are locked. No upstream call occurs inside a reset transaction.
 
 ## Deployment And Diagnosis
 
-Deploy a build containing migration `238_custom_carpool_reset_monitor.sql` and
-the earlier `237_custom_group_carpool.sql`. Normal server startup applies these
-migrations. Back up the database before deploying. The reset-monitor migration
-adds its own tables and source-change triggers; it does not reset subscription
-data itself.
+Deploy backend and frontend together, including the forward migration
+`249_custom_carpool_account_scope.sql` and all earlier carpool migrations.
+Normal server startup applies these migrations. Back up the database before
+deploying. The reset-monitor migration adds its own tables and source-change
+triggers; it does not reset subscription data itself.
 
 Search server logs for `service.carpool_reset` or `carpool_reset_receipt_failed`.
 Event records are in `carpool_subscription_reset_events`; immutable targets and
 cache acknowledgements are in `carpool_subscription_reset_targets`. Source
-generations use the committed row count of the append-only
-`carpool_reset_source_changes` table, including out-of-order commits. Do not erase
+generations use committed per-account row counts in the append-only
+`carpool_reset_account_changes` table; group binding generations use
+`carpool_reset_group_changes`. The original `carpool_reset_source_changes` table
+is retained to validate historical global snapshots. Do not erase
 these tables to retry a completed event, because they contain its deduplication
-history. Disabling carpool configuration stops future automatic detection.
+history. Disabling the carpool quota switch only stops quota calculation;
+ordinary subscription groups remain eligible for reset monitoring. An account
+without any eligible subscription-group binding is no longer monitored.
+
+On upgrade, historical targets without a binding generation are never treated as
+new account-scoped snapshots. Only the original source group can remain eligible,
+and only when its historical source revision still matches; unprovable targets
+are skipped.
 
 Automated tests use mock upstream HTTP and an explicitly isolated
 `CARPOOL_TEST_DATABASE_URL`. Never point this test variable at a business database.

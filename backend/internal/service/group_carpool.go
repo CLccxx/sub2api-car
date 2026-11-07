@@ -23,19 +23,21 @@ func applyCarpoolSettings(group *Group, previousLimit *float64) error {
 	if group.PreserveCarpoolWeeklyLimit {
 		group.WeeklyLimitUSD = previousLimit
 	} else {
-		limit := float64(160000/group.CarpoolMembers) / 100
+		limit, _ := carpoolWeeklyLimit(1600, group.CarpoolMembers)
 		group.WeeklyLimitUSD = &limit
 	}
 	return nil
 }
 
 func carpoolWeeklyLimit(estimate float64, members int) (float64, bool) {
-	const minimumWeeklyLimitUSD = 200
-	const stepUSD = 50
+	const stepUSD = 10
+	const bonusUSD = 100
 	if !validCarpoolMembers(members) || math.IsNaN(estimate) || math.IsInf(estimate, 0) || estimate <= 0 || estimate > 1e10 {
 		return 0, false
 	}
-	totalCents := math.Ceil(estimate/stepUSD) * stepUSD * 100
-	limit := math.Max(minimumWeeklyLimitUSD, math.Floor(totalCents/float64(members))/100)
+	// A positive subnormal estimate can underflow when divided by the step.
+	totalCents := math.Max(1, math.Ceil(estimate/stepUSD)) * stepUSD * 100
+	// Add the bonus in cents to avoid introducing fractional-cent float artifacts.
+	limit := (math.Floor(totalCents/float64(members)) + bonusUSD*100) / 100
 	return limit, limit > 0
 }

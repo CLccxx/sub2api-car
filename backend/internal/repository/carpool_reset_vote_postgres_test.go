@@ -8,24 +8,16 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
-	"github.com/Wei-Shaw/sub2api/migrations"
 	"github.com/stretchr/testify/require"
 )
 
 func carpoolVoteTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	db := carpoolMonitorTestDB(t)
-	_, err := db.Exec(`CREATE TABLE users(id bigint PRIMARY KEY,status text DEFAULT 'active',deleted_at timestamptz);
-		INSERT INTO users(id) VALUES(1),(2),(3),(4),(5);
-		UPDATE user_subscriptions SET status='active',expires_at=now()+interval '2 days',group_id=10;
-		INSERT INTO user_subscriptions(id,user_id,group_id,status) VALUES(5,5,20,'active')`)
+	_, err := db.Exec(`DELETE FROM account_groups WHERE group_id=20;
+ UPDATE user_subscriptions SET status='active',expires_at=now()+interval '2 days',group_id=10;
+ INSERT INTO user_subscriptions(id,user_id,group_id,status) VALUES(5,5,20,'active')`)
 	require.NoError(t, err)
-	for _, file := range []string{"241_custom_quota_reset_operations.sql", "242_custom_carpool_reset_voting.sql"} {
-		migration, err := migrations.FS.ReadFile(file)
-		require.NoError(t, err)
-		_, err = db.Exec(string(migration))
-		require.NoError(t, err)
-	}
 	return db
 }
 
@@ -96,8 +88,9 @@ func TestCarpoolVotePostgresExactMembership(t *testing.T) {
 	view, err := r.View(context.Background(), 1, 1)
 	require.NoError(t, err)
 	require.Equal(t, 5, view.MemberCount)
-	require.Equal(t, "member_count_mismatch", *view.BlockedReason)
-	require.False(t, view.CanCreate)
+	require.Nil(t, view.BlockedReason)
+	require.Equal(t, 5, view.RequiredCount)
+	require.True(t, view.CanCreate)
 }
 
 func TestCarpoolVotePostgresConfiguredSizes(t *testing.T) {
@@ -154,7 +147,7 @@ func TestCarpoolVotePostgresMonitorAndLocalRecovery(t *testing.T) {
 	event, err = monitor.ApplyEvent(ctx, eventID, now, now)
 	require.NoError(t, err)
 	require.Equal(t, "completed", event.Status)
-	require.Equal(t, 5, event.ResetCount)
+	require.Equal(t, 4, event.ResetCount)
 	_, err = db.Exec(`UPDATE user_subscriptions SET weekly_usage_usd=7 WHERE id=1`)
 	require.NoError(t, err)
 	_, err = monitor.Observe(ctx, *p.Eligibility.Source, o)
@@ -373,4 +366,175 @@ func TestCarpoolVotePostgresApplyAndPollLockOrder(t *testing.T) {
 	require.Error(t, err, "polling fails fast while an application owns the write reservation")
 	require.NoError(t, blocker.Commit())
 	require.NoError(t, <-result)
+}
+
+func TestCarpoolVotePostgresAccountElectorate(t *testing.T) {
+	db := carpoolVoteTestDB(t)
+	_, err := db.Exec(`INSERT INTO groups VALUES(30,'active','openai','subscription',5,NULL,400);
+ INSERT INTO account_groups VALUES(9,20),(9,30);
+
+ INSERT INTO user_subscriptions(id,user_id,group_id,status) VALUES(6,6,30,'active'),(7,7,20,'active'),(8,1,30,'active')`)
+	require.NoError(t, err)
+	r, v := createTestVote(t, db)
+	require.Equal(t, 7, v.RequiredCount, "all distinct account subscribers vote, independent of tier size")
+	require.Equal(t, 7, v.MemberCount)
+	for _, user := range []int64{2, 3, 4, 5, 6} {
+		v, err = r.Agree(context.Background(), user, user, v.Proposal.ID)
+		require.NoError(t, err)
+		require.Equal(t, "voting", v.Proposal.Status)
+	}
+	v, err = r.Agree(context.Background(), 1, 8, v.Proposal.ID)
+	require.NoError(t, err)
+	require.Equal(t, 6, v.Proposal.AgreedCount, "same user in a second group votes only once")
+	v, err = r.Agree(context.Background(), 7, 7, v.Proposal.ID)
+	require.NoError(t, err)
+	require.Equal(t, "executing", v.Proposal.Status)
+	require.Equal(t, 7, v.Proposal.AgreedCount)
+}
+
+func TestCarpoolVotePostgresSingleVoter(t *testing.T) {
+	db := carpoolVoteTestDB(t)
+	_, err := db.Exec(`UPDATE user_subscriptions SET status='suspended' WHERE user_id<>1`)
+	require.NoError(t, err)
+	_, v := createTestVote(t, db)
+	require.Equal(t, 1, v.RequiredCount)
+	require.Equal(t, "executing", v.Proposal.Status, "initial approval dispatches a unanimous one-person vote")
+}
+
+func dispatchAccountTestVote(t *testing.T, db *sql.DB) (service.CarpoolResetVoteRepository, *service.CarpoolResetVote) {
+	t.Helper()
+	r, v := createTestVote(t, db)
+	ctx := context.Background()
+	e, err := r.Eligibility(ctx, 1, 1)
+	require.NoError(t, err)
+	for _, m := range e.Members {
+		if m.UserID == 1 {
+			continue
+		}
+		_, err = r.Agree(ctx, m.UserID, m.SubscriptionID, v.Proposal.ID)
+		require.NoError(t, err)
+	}
+	p, err := r.Load(ctx, v.Proposal.ID)
+	require.NoError(t, err)
+	require.Equal(t, "executing", p.Status)
+	ok, err := r.Prepare(ctx, p.ID, p.Observation, "card", "scope-request")
+	require.NoError(t, err)
+	require.True(t, ok)
+	ok, err = r.Dispatch(ctx, p.ID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	return r, p
+}
+
+func TestCarpoolVotePostgresBindingChangesBeforeApply(t *testing.T) {
+	for _, change := range []string{
+		`DELETE FROM account_groups WHERE group_id=20; INSERT INTO account_groups VALUES(8,20)`,
+		`DELETE FROM account_groups WHERE group_id=20; INSERT INTO account_groups VALUES(8,20); DELETE FROM account_groups WHERE group_id=20; INSERT INTO account_groups VALUES(9,20)`,
+		`UPDATE groups SET subscription_type='standard' WHERE id=20`,
+		`UPDATE groups SET subscription_type='standard' WHERE id=20; UPDATE groups SET subscription_type='subscription' WHERE id=20`,
+	} {
+		t.Run(change, func(t *testing.T) {
+			db := carpoolVoteTestDB(t)
+			_, err := db.Exec(`INSERT INTO account_groups VALUES(9,20); INSERT INTO accounts(id,platform,type,status,credentials) VALUES(8,'openai','oauth','active','{"chatgpt_account_id":"other"}')`)
+			require.NoError(t, err)
+			r, p := dispatchAccountTestVote(t, db)
+			_, err = db.Exec(change)
+			require.NoError(t, err)
+			_, err = db.Exec(`INSERT INTO user_subscriptions(id,user_id,group_id,status) VALUES(6,6,10,'active');
+ INSERT INTO quota_reset_operations(account_id,request_id,credit_id,status,result,completed_at) VALUES(9,'scope-request','card','succeeded','{"code":"ok","windows_reset":1}',now())`)
+			require.NoError(t, err)
+			id, err := r.Succeed(context.Background(), p.ID, &service.OpenAIQuotaResetResult{Code: "ok", WindowsReset: 1})
+			require.NoError(t, err)
+			result, err := NewCarpoolResetMonitorRepository(db).ApplyEvent(context.Background(), id, time.Now(), time.Now())
+			require.NoError(t, err)
+			require.Equal(t, 4, result.ResetCount)
+			require.Equal(t, 1, result.SkippedCount)
+			var untouched int
+			require.NoError(t, db.QueryRow(`SELECT count(*) FROM user_subscriptions WHERE id IN(5,6) AND weekly_usage_usd=20`).Scan(&untouched))
+			require.Equal(t, 2, untouched)
+		})
+	}
+}
+
+func TestCarpoolVotePostgresOrdinaryMembershipRoundTrip(t *testing.T) {
+	for _, change := range []string{
+		`UPDATE user_subscriptions SET status='suspended' WHERE id=5; UPDATE user_subscriptions SET status='active' WHERE id=5`,
+		`UPDATE users SET status='disabled' WHERE id=5; UPDATE users SET status='active' WHERE id=5`,
+		`DELETE FROM account_groups WHERE group_id=20; INSERT INTO account_groups VALUES(9,20)`,
+	} {
+		t.Run(change, func(t *testing.T) {
+			db := carpoolVoteTestDB(t)
+			_, err := db.Exec(`INSERT INTO account_groups VALUES(9,20)`)
+			require.NoError(t, err)
+			r, v := createTestVote(t, db)
+			require.Equal(t, "voting", v.Proposal.Status)
+			_, err = db.Exec(change)
+			require.NoError(t, err)
+			v, err = r.View(context.Background(), 1, 1)
+			require.NoError(t, err)
+			require.Equal(t, "invalidated", v.Proposal.Status)
+		})
+	}
+}
+
+func TestCarpoolVotePostgresOtherAccountDoesNotInvalidate(t *testing.T) {
+	db := carpoolVoteTestDB(t)
+	_, err := db.Exec(`INSERT INTO groups VALUES(30,'active','openai','subscription',0,NULL,100);
+ INSERT INTO accounts(id,platform,type,status,credentials) VALUES(8,'openai','oauth','active','{"chatgpt_account_id":"other"}'); INSERT INTO account_groups VALUES(8,30)`)
+	require.NoError(t, err)
+	r, v := createTestVote(t, db)
+	require.Equal(t, "voting", v.Proposal.Status)
+	_, err = db.Exec(`UPDATE accounts SET credentials='{"chatgpt_account_id":"new-other"}' WHERE id=8; UPDATE groups SET carpool_members=5 WHERE id=30`)
+	require.NoError(t, err)
+	v, err = r.View(context.Background(), 1, 1)
+	require.NoError(t, err)
+	require.Equal(t, "voting", v.Proposal.Status)
+}
+
+func TestCarpoolVotePostgresLegacyDispatchedRecovery(t *testing.T) {
+	db := carpoolVoteTestDB(t)
+	r, p := dispatchAccountTestVote(t, db)
+	_, err := db.Exec(`UPDATE carpool_reset_votes SET eligibility=eligibility-'ScopeVersion',status='awaiting_confirmation'; UPDATE carpool_reset_vote_targets SET binding_revision=NULL`)
+	require.NoError(t, err)
+	ok, err := r.Dispatch(context.Background(), p.ID)
+	require.Error(t, err)
+	require.False(t, ok, "legacy uncertainty must never replay consumption under a new electorate")
+	_, err = db.Exec(`INSERT INTO quota_reset_operations(account_id,request_id,credit_id,status,result,completed_at) VALUES(9,'scope-request','card','succeeded','{"code":"ok","windows_reset":1}',now())`)
+	require.NoError(t, err)
+	id, err := r.Succeed(context.Background(), p.ID, &service.OpenAIQuotaResetResult{Code: "ok", WindowsReset: 1})
+	require.NoError(t, err)
+	require.Positive(t, id, "known success remains locally recoverable")
+	again, err := r.Succeed(context.Background(), p.ID, &service.OpenAIQuotaResetResult{Code: "ok", WindowsReset: 1})
+	require.NoError(t, err)
+	require.Equal(t, id, again)
+}
+
+func TestCarpoolVotePostgresSharedBalanceDoesNotInvalidate(t *testing.T) {
+	db := carpoolVoteTestDB(t)
+	_, err := db.Exec(`INSERT INTO groups VALUES(30,'active','openai','subscription',0,NULL,100),(40,'active','openai','standard',0,NULL,100);
+ INSERT INTO accounts(id,platform,type,status,credentials) VALUES(8,'openai','oauth','active','{"chatgpt_account_id":"other"}');
+ INSERT INTO account_groups VALUES(8,30),(8,40),(9,40)`)
+	require.NoError(t, err)
+	r, _ := createTestVote(t, db)
+	_, err = db.Exec(`UPDATE accounts SET credentials='{"chatgpt_account_id":"new-other"}' WHERE id=8; DELETE FROM account_groups WHERE group_id=40 AND account_id=8; UPDATE groups SET status='disabled' WHERE id=40`)
+	require.NoError(t, err)
+	v, err := r.View(context.Background(), 1, 1)
+	require.NoError(t, err)
+	require.Equal(t, "voting", v.Proposal.Status)
+}
+
+func TestCarpoolVotePostgresPendingNotStarvedByVoting(t *testing.T) {
+	db := carpoolVoteTestDB(t)
+	r, v := createTestVote(t, db)
+	_, err := db.Exec(`INSERT INTO carpool_reset_votes(group_id,account_id,created_by,creation_key,eligibility,observation,required_count)
+ SELECT 100+id,100+id,100+id,md5(id::text)::uuid,'{}','{}',1 FROM generate_series(1,55) id;
+ INSERT INTO carpool_reset_votes(group_id,account_id,created_by,creation_key,eligibility,observation,required_count,status)
+ VALUES(200,200,200,md5('ready')::uuid,'{}','{}',1,'executing')`)
+	require.NoError(t, err)
+	var ready int64
+	require.NoError(t, db.QueryRow(`SELECT id FROM carpool_reset_votes WHERE account_id=200`).Scan(&ready))
+	pending, err := r.Pending(context.Background())
+	require.NoError(t, err)
+	require.Contains(t, pending, ready)
+	require.NotContains(t, pending, v.Proposal.ID)
 }
