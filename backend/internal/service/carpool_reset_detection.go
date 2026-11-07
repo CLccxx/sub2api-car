@@ -40,7 +40,7 @@ func CarpoolResetEventKey(source CarpoolResetSource, observation CarpoolResetObs
 	if reason == "receipt" && observation.Receipt != nil {
 		evidence = observation.Receipt.ID
 	}
-	return CarpoolResetIdentityHash(fmt.Sprintf("%d:%d:%d:%s:%s:%d", source.GroupID, source.AccountID, source.Revision, source.IdentityHash, reason, evidence))
+	return CarpoolResetIdentityHash(fmt.Sprintf("account-v%d:%d:%d:%s:%s:%d", source.ScopeVersion, source.AccountID, source.Revision, source.IdentityHash, reason, evidence))
 }
 
 func ReadCarpoolResetObservation(usage *OpenAIQuotaUsage, expectedAccount string, now time.Time) (CarpoolResetObservation, bool) {

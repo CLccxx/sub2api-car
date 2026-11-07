@@ -45,6 +45,22 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
 
 describe('ResetVotePanel', () => {
+  it.each([1, 7])('uses the account electorate of %s members in confirmation and progress', async required => {
+    getResetVote.mockResolvedValue({ ...idle(), required_count: required, member_count: required })
+    createResetVote.mockResolvedValue({
+      ...voting({ required_count: required, my_vote: true, can_agree: false,
+        status: required === 1 ? 'executing' : 'voting' }),
+      required_count: required, member_count: required
+    })
+    const wrapper = open()
+    await showConfirmation(wrapper)
+    expect(wrapper.get('[role="dialog"]').text()).toContain(`"required":${required}`)
+    await wrapper.get('[data-test="reset-vote-confirm"]').trigger('click')
+    await flushPromises()
+    expect(createResetVote).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-test="reset-vote-progress"]').text()).toContain(`1/${required}`)
+  })
+
   it.each([null, 0, -1, Number.NaN, Number.POSITIVE_INFINITY])('does not offer creation for %s credits', async resetCredits => {
     const wrapper = open({ resetCredits })
     await flushPromises()

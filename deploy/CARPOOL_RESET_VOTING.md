@@ -4,10 +4,14 @@
 
 - Deploy backend and frontend from the same revision. Back up PostgreSQL first.
 - Startup migrations add `241_custom_quota_reset_operations.sql` and
-  `242_custom_carpool_reset_voting.sql`, after the existing carpool migrations.
-- Keep the current single active OpenAI carpool group, bound to one OAuth parent
-  account. Set `carpool_members` to the exact number of distinct active users with
-  active, unexpired subscriptions (2 through 5).
+  `242_custom_carpool_reset_voting.sql`, followed by
+  `249_custom_carpool_account_scope.sql` for account-scoped monitoring and voting.
+- Bind each subscription group to one eligible OpenAI OAuth parent account. An
+  account can serve ordinary subscriptions and several quota-tier groups. Its electorate is all
+  distinct active users with started, active, unexpired subscriptions across its
+  bound subscription groups, including ordinary subscription groups. The
+  `carpool_members` value controls the quota divisor independently of electorate
+  size. One voter and electorates above five are supported.
 - Disable automatic reset-card use in the existing account settings when user
   consent is required. This feature does not change those switches.
 - The application worker scans durable proposals on startup and every 15 seconds.
@@ -16,7 +20,10 @@
 ## Rules
 
 - A request lasts 24 hours; the initiator contributes one approval.
-- Every configured member must approve. Duplicate clicks do not add votes.
+- Every eligible account subscription member must approve. A user in multiple
+  groups has one vote. Members can view and approve the same account proposal
+  from their own subscription group. The initiator's approval completes a
+  one-person electorate. Duplicate clicks do not add votes.
 - Subscription lifecycle, user eligibility, group configuration and account
   binding changes invalidate unexecuted votes, including changed-back settings.
   Extending the same still-active subscription term does not invalidate votes.
@@ -30,11 +37,11 @@
 - Lost creation acknowledgements can be reconciled with a database-only GET
   using the original `request_id`; `request_resolved` is true only for a durable
   request mapping belonging to the authenticated user.
-- Confirmed consumption creates one durable global subscription reset event.
-  Eligible targets' daily, weekly and monthly used amounts are cleared; limits,
-  balances, subscription expiry and historical usage logs are unchanged.
+- Confirmed consumption creates one durable account-scoped subscription reset
+  event. It clears eligible targets' daily, weekly and monthly used amounts and
+  retains limits, balances, subscription expiry and historical usage logs.
 - The immutable target snapshot is captured immediately before dispatch.
-  Revoked, expired, deleted or replaced targets are checked again and skipped.
+  Revoked, expired, deleted, rebound or replaced targets are checked again and skipped.
   Subscriptions added after dispatch are not retroactively reset.
 - The reset monitor recognizes the same event, including delayed database
   recovery, rather than clearing quota again. Cache/account-state recovery is
@@ -60,9 +67,14 @@ and leaves an in-flight consume untouched. A different request may repair the
 old operation, but receives a conflict instead of inheriting its success; a
 separate retry is required, and unfinished vote application remains protected.
 
+The account-scope migration invalidates old proposals that have not been sent,
+because their approvals used the old electorate. Dispatched historical proposals
+retain their durable outcomes for recovery; an uncertain historical request is
+not replayed under the new voting rules.
+
 The application cannot make external upstream account changes atomic with local
-database transactions. Keep the single shared-account configuration stable while
-an operation is in progress.
+database transactions. Keep the affected account and its group bindings stable
+while an operation is in progress.
 
 ## Verification
 

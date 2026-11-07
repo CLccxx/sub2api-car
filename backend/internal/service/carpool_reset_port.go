@@ -6,6 +6,7 @@ import (
 )
 
 type CarpoolResetSource struct {
+	ScopeVersion      int
 	GroupID           int64
 	AccountID         int64
 	Revision          int64
@@ -34,6 +35,7 @@ type CarpoolResetReceiptRecorder interface {
 
 type CarpoolResetMonitorRepository interface {
 	CarpoolResetReceiptRecorder
+	Sources(context.Context) ([]CarpoolResetSource, error)
 	Source(context.Context) (*CarpoolResetSource, error)
 	ClearBaseline(context.Context) error
 	Observe(context.Context, CarpoolResetSource, CarpoolResetObservation) (*CarpoolResetEvent, error)

@@ -15,7 +15,13 @@ func (r *carpoolResetVoteRepository) Pending(ctx context.Context) ([]int64, erro
 	if err := reconcileConfirmedQuotaResetOperations(ctx, r.db); err != nil {
 		return nil, err
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT id FROM carpool_reset_votes WHERE status IN ('voting','executing','applying')
+	// Open ballots are not executable work. Expire them separately so many
+	// accounts still collecting votes cannot starve a ready reset behind LIMIT.
+	if _, err := r.db.ExecContext(ctx, `UPDATE carpool_reset_votes SET status='expired',reason='proposal_expired',updated_at=clock_timestamp()
+ WHERE status='voting' AND dispatched_at IS NULL AND expires_at<=clock_timestamp()`); err != nil {
+		return nil, err
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT id FROM carpool_reset_votes WHERE status IN ('executing','applying')
 		OR (status='awaiting_confirmation' AND updated_at<clock_timestamp()-interval '1 minute')
 		OR (dispatched_at IS NULL AND EXISTS(SELECT 1 FROM quota_reset_operations o WHERE o.account_id=carpool_reset_votes.account_id
 			AND o.request_id=carpool_reset_votes.request_id AND o.status='pending')) ORDER BY id LIMIT 50`)
@@ -122,9 +128,10 @@ func (r *carpoolResetVoteRepository) prepareOrDispatch(ctx context.Context, id i
 		}
 		_, err = tx.ExecContext(ctx, `UPDATE carpool_reset_votes SET dispatched_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id=$1`, id)
 		if err == nil {
-			_, err = tx.ExecContext(ctx, `INSERT INTO carpool_reset_vote_targets(proposal_id,subscription_id,user_id,group_id,starts_at)
-				SELECT $1,id,user_id,group_id,starts_at FROM user_subscriptions WHERE deleted_at IS NULL AND status='active'
-				AND starts_at<=clock_timestamp() AND expires_at>clock_timestamp() ORDER BY id ON CONFLICT DO NOTHING`, id)
+			_, err = tx.ExecContext(ctx, `INSERT INTO carpool_reset_vote_targets(proposal_id,subscription_id,user_id,group_id,starts_at,binding_revision)
+ SELECT $2,s.id,s.user_id,s.group_id,s.starts_at,(SELECT count(*) FROM carpool_reset_group_changes c WHERE c.group_id=s.group_id)
+ FROM user_subscriptions s WHERE s.deleted_at IS NULL AND s.status='active' AND s.starts_at<=clock_timestamp() AND s.expires_at>clock_timestamp()
+ AND s.group_id IN (`+carpoolAccountSubscriptionGroups+`) ORDER BY s.id ON CONFLICT DO NOTHING`, p.Eligibility.Source.AccountID, id)
 		}
 	}
 	if err != nil {
@@ -186,15 +193,15 @@ func (r *carpoolResetVoteRepository) Succeed(ctx context.Context, id int64, resu
 		return 0, err
 	}
 	var event int64
-	err = tx.QueryRowContext(ctx, `INSERT INTO carpool_subscription_reset_events(event_key,group_id,account_id,identity_hash,reason,observed_at,expires_at,source_revision)
-		VALUES($1,$2,$3,$4,'vote',$5,$5::timestamptz+interval '100 years',$6) RETURNING id`, fmt.Sprintf("vote:%d", id), source.GroupID, source.AccountID, source.IdentityHash, occurred, source.Revision).Scan(&event)
+	err = tx.QueryRowContext(ctx, `INSERT INTO carpool_subscription_reset_events(event_key,group_id,account_id,identity_hash,reason,observed_at,expires_at,source_revision,scope_version)
+		VALUES($1,$2,$3,$4,'vote',$5,$5::timestamptz+interval '100 years',$6,$7) RETURNING id`, fmt.Sprintf("vote:%d", id), source.GroupID, source.AccountID, source.IdentityHash, occurred, source.Revision, source.ScopeVersion).Scan(&event)
 	if err != nil {
 		return 0, err
 	}
 	// The immutable pre-dispatch snapshot prevents a recovery from including
 	// subscriptions created after consumption; ApplyEvent rechecks each target.
-	_, err = tx.ExecContext(ctx, `INSERT INTO carpool_subscription_reset_targets(event_id,subscription_id,user_id,group_id,starts_at)
-		SELECT $1,subscription_id,user_id,group_id,starts_at FROM carpool_reset_vote_targets WHERE proposal_id=$2 ORDER BY subscription_id`, event, id)
+	_, err = tx.ExecContext(ctx, `INSERT INTO carpool_subscription_reset_targets(event_id,subscription_id,user_id,group_id,starts_at,binding_revision)
+		SELECT $1,subscription_id,user_id,group_id,starts_at,binding_revision FROM carpool_reset_vote_targets WHERE proposal_id=$2 ORDER BY subscription_id`, event, id)
 	if err != nil {
 		return 0, err
 	}
@@ -206,8 +213,11 @@ func (r *carpoolResetVoteRepository) Succeed(ctx context.Context, id int64, resu
 	// window/receipt evidence is correlated to this event, never replayed as a reset.
 	baseline := service.CarpoolResetBaseline{Observation: p.Observation, Since: p.Observation.ObservedAt}
 	encoded, _ := json.Marshal(baseline)
-	_, err = tx.ExecContext(ctx, `UPDATE carpool_reset_monitor SET group_id=$1,account_id=$2,identity_hash=$3,source_revision=$4,baseline=$5::jsonb
-		WHERE id=1 AND (baseline IS NULL OR account_id IS DISTINCT FROM $2 OR source_revision<>$4)`, source.GroupID, source.AccountID, source.IdentityHash, source.Revision, string(encoded))
+	_, err = tx.ExecContext(ctx, `INSERT INTO carpool_reset_account_monitors(group_id,account_id,identity_hash,source_revision,baseline,scope_version)
+ VALUES($1,$2,$3,$4,$5::jsonb,$6) ON CONFLICT(account_id) DO UPDATE SET group_id=EXCLUDED.group_id,identity_hash=EXCLUDED.identity_hash,
+ source_revision=EXCLUDED.source_revision,baseline=EXCLUDED.baseline,scope_version=EXCLUDED.scope_version
+ WHERE carpool_reset_account_monitors.baseline IS NULL OR carpool_reset_account_monitors.identity_hash IS DISTINCT FROM EXCLUDED.identity_hash
+ OR carpool_reset_account_monitors.source_revision<>EXCLUDED.source_revision OR carpool_reset_account_monitors.scope_version<>EXCLUDED.scope_version`, source.GroupID, source.AccountID, source.IdentityHash, source.Revision, string(encoded), source.ScopeVersion)
 	if err != nil {
 		return 0, err
 	}

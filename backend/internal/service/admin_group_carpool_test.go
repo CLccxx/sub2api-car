@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -22,7 +23,7 @@ func TestCarpoolGroupEnable(t *testing.T) {
 	require.Equal(t, "4 人车分组", got.Name)
 	require.Equal(t, "4 人均分额度", got.Description)
 	require.NotNil(t, got.WeeklyLimitUSD)
-	require.Equal(t, 400.0, *got.WeeklyLimitUSD)
+	require.Equal(t, 500.0, *got.WeeklyLimitUSD)
 	require.Nil(t, got.DailyLimitUSD)
 	require.Nil(t, got.MonthlyLimitUSD)
 }
@@ -68,7 +69,7 @@ func TestCarpoolGroupZeroCapAndDisable(t *testing.T) {
 	svc := &adminServiceImpl{groupRepo: repo}
 	got, err := svc.UpdateGroup(context.Background(), 7, &UpdateGroupInput{})
 	require.NoError(t, err)
-	require.Equal(t, 400.0, *got.WeeklyLimitUSD)
+	require.Equal(t, 500.0, *got.WeeklyLimitUSD)
 	cap := 325.0
 	repo.group.WeeklyLimitUSD = &cap
 	off := 0
@@ -80,17 +81,33 @@ func TestCarpoolGroupZeroCapAndDisable(t *testing.T) {
 }
 
 func TestCarpoolGroupCreate(t *testing.T) {
-	for _, supplied := range []float64{0, 325} {
-		repo := &groupRepoStubForAdmin{}
-		svc := &adminServiceImpl{groupRepo: repo}
-		got, err := svc.CreateGroup(context.Background(), &CreateGroupInput{Name: "old", Platform: PlatformOpenAI,
-			RateMultiplier: 1, SubscriptionType: SubscriptionTypeSubscription, CarpoolMembers: 3, WeeklyLimitUSD: &supplied})
-		require.NoError(t, err)
-		require.Equal(t, "3 人车分组", got.Name)
-		if supplied == 0 {
-			require.Equal(t, 533.33, *got.WeeklyLimitUSD)
-		} else {
-			require.Equal(t, supplied, *got.WeeklyLimitUSD)
+	zero, negative, positive := 0.0, -10.0, 325.0
+	for _, test := range []struct {
+		members      int
+		defaultLimit float64
+	}{{2, 900}, {3, 633.33}, {4, 500}, {5, 420}} {
+		for _, cap := range []struct {
+			name  string
+			value *float64
+		}{{"missing", nil}, {"zero", &zero}, {"negative", &negative}, {"positive", &positive}} {
+			t.Run(fmt.Sprintf("%d members %s cap", test.members, cap.name), func(t *testing.T) {
+				supplied := cap.value
+				repo := &groupRepoStubForAdmin{}
+				svc := &adminServiceImpl{groupRepo: repo}
+				got, err := svc.CreateGroup(context.Background(), &CreateGroupInput{Name: "old", Platform: PlatformOpenAI,
+					RateMultiplier: 1, SubscriptionType: SubscriptionTypeSubscription, CarpoolMembers: test.members, WeeklyLimitUSD: supplied})
+				require.NoError(t, err)
+				require.Equal(t, fmt.Sprintf("%d 人车分组", test.members), got.Name)
+				require.NotNil(t, got.WeeklyLimitUSD)
+				if supplied == nil || *supplied <= 0 {
+					require.Equal(t, test.defaultLimit, *got.WeeklyLimitUSD)
+					refreshed, ok := carpoolWeeklyLimit(1600, test.members)
+					require.True(t, ok)
+					require.Equal(t, refreshed, *got.WeeklyLimitUSD, "bootstrap and refresh must use the same quota formula")
+				} else {
+					require.Equal(t, *supplied, *got.WeeklyLimitUSD)
+				}
+			})
 		}
 	}
 }

@@ -33,6 +33,7 @@ type CarpoolVoteMember struct {
 }
 
 type CarpoolVoteEligibility struct {
+	ScopeVersion       int
 	Source             *CarpoolResetSource
 	GroupID            int64
 	RequiredCount      int

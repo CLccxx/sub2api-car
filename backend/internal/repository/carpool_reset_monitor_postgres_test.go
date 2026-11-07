@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -16,6 +17,11 @@ import (
 
 func carpoolMonitorTestDB(t *testing.T) *sql.DB {
 	t.Helper()
+	return carpoolMonitorSchemaDB(t, true)
+}
+
+func carpoolMonitorSchemaDB(t *testing.T, accountScope bool) *sql.DB {
+	t.Helper()
 	dsn := os.Getenv("CARPOOL_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("requires an isolated CARPOOL_TEST_DATABASE_URL")
@@ -28,6 +34,8 @@ func carpoolMonitorTestDB(t *testing.T) *sql.DB {
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = db.Exec(`DROP SCHEMA ` + schema + ` CASCADE`); _ = db.Close() })
 	_, err = db.Exec(`
+		CREATE TABLE users(id bigint PRIMARY KEY,status text DEFAULT 'active',deleted_at timestamptz);
+ INSERT INTO users(id) SELECT generate_series(1,1000);
 		CREATE TABLE groups (id bigint PRIMARY KEY, status text, platform text, subscription_type text, carpool_members int, deleted_at timestamptz, weekly_limit_usd numeric);
 		CREATE TABLE accounts (id bigint PRIMARY KEY, platform text, type text, status text, parent_account_id bigint, credentials jsonb, deleted_at timestamptz, auto_pause_on_expired boolean DEFAULT false, expires_at timestamptz);
 		CREATE TABLE account_groups (account_id bigint, group_id bigint, PRIMARY KEY(account_id,group_id));
@@ -37,7 +45,7 @@ func carpoolMonitorTestDB(t *testing.T) *sql.DB {
 		 daily_window_start timestamptz DEFAULT now()-interval '1 day', weekly_window_start timestamptz DEFAULT now()-interval '1 day', monthly_window_start timestamptz DEFAULT now()-interval '1 day');
 		INSERT INTO groups VALUES (10,'active','openai','subscription',4,NULL,325), (20,'active','openai','subscription',0,NULL,99);
 		INSERT INTO accounts (id,platform,type,status,credentials) VALUES (9,'openai','oauth','active','{"chatgpt_account_id":"shared"}');
-		INSERT INTO account_groups VALUES(9,10);
+		INSERT INTO account_groups VALUES(9,10),(9,20);
 		INSERT INTO user_subscriptions(id,user_id,group_id,status) VALUES (1,1,10,'active'), (2,2,20,'active'), (3,3,10,'suspended');
 		INSERT INTO user_subscriptions(id,user_id,group_id,status,expires_at) VALUES (4,4,10,'active',now()-interval '1 second');
 	`)
@@ -48,6 +56,16 @@ func carpoolMonitorTestDB(t *testing.T) *sql.DB {
 	require.NoError(t, err)
 	_, err = db.Exec(string(migration))
 	require.NoError(t, err)
+	files := []string{"241_custom_quota_reset_operations.sql", "242_custom_carpool_reset_voting.sql"}
+	if accountScope {
+		files = append(files, "249_custom_carpool_account_scope.sql")
+	}
+	for _, file := range files {
+		migration, err := migrations.FS.ReadFile(file)
+		require.NoError(t, err)
+		_, err = db.Exec(string(migration))
+		require.NoError(t, err)
+	}
 	return db
 }
 
@@ -83,7 +101,7 @@ func TestCarpoolResetMonitorPostgresExactlyOnce(t *testing.T) {
 	result, err := repo.ApplyEvent(ctx, event.ID, now, now.Truncate(24*time.Hour))
 	require.NoError(t, err)
 	require.Equal(t, "completed", result.Status)
-	require.Equal(t, 2, result.ResetCount, "global scope includes the second group")
+	require.Equal(t, 2, result.ResetCount, "account scope includes its ordinary subscription group")
 	var daily, weekly, monthly float64
 	var window time.Time
 	for _, id := range []int64{1, 2} {
@@ -136,7 +154,7 @@ func TestCarpoolResetMonitorPostgresRollback(t *testing.T) {
 }
 
 func TestCarpoolResetMonitorPostgresGuards(t *testing.T) {
-	for _, scenario := range []string{"revoke", "renew", "expired subscription", "deleted subscription", "changed owner", "changed group", "replace account", "extra account", "disabled", "expired event", "inactive account", "shadow account", "expired account", "second carpool", "insert carpool", "delete group", "delete account", "unbound"} {
+	for _, scenario := range []string{"revoke", "renew", "expired subscription", "deleted subscription", "changed owner", "changed group", "replace account", "extra account", "expired event", "inactive account", "shadow account", "expired account", "delete group", "delete account", "unbound"} {
 		t.Run(scenario, func(t *testing.T) {
 			db := carpoolMonitorTestDB(t)
 			repo, event, now := carpoolMonitorPendingEvent(t, db)
@@ -159,7 +177,7 @@ func TestCarpoolResetMonitorPostgresGuards(t *testing.T) {
 			case "extra account":
 				_, err = db.Exec(`INSERT INTO accounts(id,platform,type,status,credentials) VALUES (11,'openai','oauth','inactive','{}'); INSERT INTO account_groups VALUES (11,10)`)
 			case "disabled":
-				_, err = db.Exec(`UPDATE groups SET carpool_members=0 WHERE id=10`)
+				_, err = db.Exec(`UPDATE groups SET status='disabled' WHERE id=10`)
 			case "expired event":
 				now = now.Add(time.Hour)
 			case "inactive account":
@@ -268,10 +286,10 @@ func TestCarpoolResetMonitorPostgresSourceReplacementAndSuperseding(t *testing.T
 				require.NoError(t, err)
 			}
 			if scenario == "clear" {
-				_, err := db.Exec(`UPDATE groups SET carpool_members=0 WHERE id=10`)
+				_, err := db.Exec(`UPDATE groups SET status='disabled' WHERE id IN(10,20)`)
 				require.NoError(t, err)
 				require.NoError(t, repo.ClearBaseline(ctx))
-				_, err = db.Exec(`UPDATE groups SET carpool_members=4 WHERE id=10`)
+				_, err = db.Exec(`UPDATE groups SET status='active' WHERE id IN(10,20)`)
 				require.NoError(t, err)
 			}
 			source, err := repo.Source(ctx)
@@ -323,7 +341,7 @@ func TestCarpoolResetMonitorPostgresSourceWrites(t *testing.T) {
 			case "identity round trip":
 				_, err = db.Exec(`UPDATE accounts SET credentials='{"chatgpt_account_id":"other"}' WHERE id=9; UPDATE accounts SET credentials='{"chatgpt_account_id":"shared"}' WHERE id=9`)
 			case "binding round trip":
-				_, err = db.Exec(`DELETE FROM account_groups WHERE account_id=9; INSERT INTO account_groups VALUES(9,10)`)
+				_, err = db.Exec(`DELETE FROM account_groups WHERE account_id=9; INSERT INTO account_groups VALUES(9,10),(9,20)`)
 			case "disabled round trip":
 				_, err = db.Exec(`UPDATE groups SET carpool_members=0 WHERE id=10; UPDATE groups SET carpool_members=4 WHERE id=10`)
 			case "token refresh":
@@ -494,4 +512,182 @@ func TestCarpoolResetMonitorPostgresConcurrentInstances(t *testing.T) {
 	require.Equal(t, 2, count, "each subscription is updated exactly once across concurrent instances")
 	require.NoError(t, pool.QueryRow(`SELECT count(*) FROM carpool_subscription_reset_events`).Scan(&count))
 	require.Equal(t, 1, count)
+}
+
+func TestCarpoolResetMonitorPostgresAccountScope(t *testing.T) {
+	db := carpoolMonitorTestDB(t)
+	_, err := db.Exec(`INSERT INTO groups VALUES(30,'active','openai','subscription',5,NULL,400),(40,'active','openai','standard',0,NULL,0),(50,'active','openai','subscription',4,NULL,500),(60,'active','openai','subscription',5,NULL,500);
+ INSERT INTO accounts(id,platform,type,status,credentials) VALUES(8,'openai','oauth','active','{"chatgpt_account_id":"other"}');
+ INSERT INTO account_groups VALUES(9,30),(9,40),(8,50),(8,60);
+ INSERT INTO user_subscriptions(id,user_id,group_id,status) VALUES(5,5,30,'active'),(6,6,40,'active'),(7,7,50,'active'),(8,8,60,'active')`)
+	require.NoError(t, err)
+	r := NewCarpoolResetMonitorRepository(db)
+	// A source is resolved per account even when several tiers and accounts exist.
+	e, err := NewCarpoolResetVoteRepository(db).Eligibility(context.Background(), 1, 1)
+	require.NoError(t, err)
+	require.NotNil(t, e.Source)
+	now := time.Now().UTC().Truncate(time.Second)
+	_, err = r.Observe(context.Background(), *e.Source, service.CarpoolResetObservation{ObservedAt: now, ResetAt: now.Add(time.Hour), Utilization: 20})
+	require.NoError(t, err)
+	event, err := r.Observe(context.Background(), *e.Source, service.CarpoolResetObservation{ObservedAt: now.Add(time.Minute), ResetAt: now.Add(7 * 24 * time.Hour), Utilization: 0})
+	require.NoError(t, err)
+	require.NotNil(t, event)
+	result, err := r.ApplyEvent(context.Background(), event.ID, now.Add(time.Minute), now)
+	require.NoError(t, err)
+	require.Equal(t, 3, result.ResetCount)
+	var resetIDs string
+	require.NoError(t, db.QueryRow(`SELECT string_agg(id::text,',' ORDER BY id) FROM user_subscriptions WHERE weekly_usage_usd=0`).Scan(&resetIDs))
+	require.Equal(t, "1,2,5", resetIDs, "ordinary subscriptions included, balance and other accounts excluded")
+}
+
+func TestCarpoolResetMonitorPostgresOrdinaryOAuthSources(t *testing.T) {
+	db := carpoolMonitorTestDB(t)
+	_, err := db.Exec(`UPDATE groups SET carpool_members=0;
+ INSERT INTO groups VALUES(30,'active','openai','subscription',0,NULL,100),(40,'active','openai','standard',0,NULL,100);
+ INSERT INTO accounts(id,platform,type,status,credentials) VALUES(8,'openai','apikey','active','{"chatgpt_account_id":"key-account"}'),(7,'openai','oauth','active','{"chatgpt_account_id":"balance-only"}');
+ INSERT INTO account_groups VALUES(8,30),(7,40)`)
+	require.NoError(t, err)
+	r := NewCarpoolResetMonitorRepository(db)
+	sources, err := r.Sources(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	require.EqualValues(t, 9, sources[0].AccountID)
+	_, event, now := carpoolMonitorPendingEvent(t, db)
+	result, err := r.ApplyEvent(context.Background(), event.ID, now, now)
+	require.NoError(t, err)
+	require.Equal(t, 2, result.ResetCount)
+	e, err := NewCarpoolResetVoteRepository(db).Eligibility(context.Background(), 1, 1)
+	require.NoError(t, err)
+	require.Empty(t, e.BlockedReason)
+	require.Equal(t, 2, e.RequiredCount)
+}
+
+func TestCarpoolResetMonitorPostgresIndependentAccounts(t *testing.T) {
+	db := carpoolMonitorTestDB(t)
+	_, err := db.Exec(`INSERT INTO groups VALUES(30,'active','openai','subscription',4,NULL,100),(40,'active','openai','subscription',5,NULL,100);
+ INSERT INTO accounts(id,platform,type,status,credentials) VALUES(8,'openai','oauth','active','{"chatgpt_account_id":"other"}');
+ INSERT INTO account_groups VALUES(8,30),(8,40);
+ INSERT INTO user_subscriptions(id,user_id,group_id,status) VALUES(5,5,30,'active'),(6,6,40,'active')`)
+	require.NoError(t, err)
+	r := NewCarpoolResetMonitorRepository(db)
+	ctx := context.Background()
+	sources, err := r.Sources(ctx)
+	require.NoError(t, err)
+	require.Len(t, sources, 2)
+	now := time.Now().UTC().Truncate(time.Second)
+	events := map[int64]int64{}
+	for _, source := range sources {
+		_, err = r.Observe(ctx, source, service.CarpoolResetObservation{ObservedAt: now, ResetAt: now.Add(time.Hour), Utilization: 20})
+		require.NoError(t, err)
+	}
+	for _, source := range sources {
+		event, err := r.Observe(ctx, source, service.CarpoolResetObservation{ObservedAt: now.Add(time.Minute), ResetAt: now.Add(7 * 24 * time.Hour), Utilization: 0})
+		require.NoError(t, err)
+		require.NotNil(t, event)
+		events[source.AccountID] = event.ID
+	}
+	var baselines int
+	require.NoError(t, db.QueryRow(`SELECT count(*) FROM carpool_reset_account_monitors WHERE baseline IS NOT NULL`).Scan(&baselines))
+	require.Equal(t, 2, baselines)
+	// Only B changes. A retains both its baseline and its pending event.
+	_, err = db.Exec(`UPDATE accounts SET credentials='{"chatgpt_account_id":"other-new"}' WHERE id=8`)
+	require.NoError(t, err)
+	result, err := r.ApplyEvent(ctx, events[9], now.Add(time.Minute), now)
+	require.NoError(t, err)
+	require.Equal(t, "completed", result.Status)
+	require.Equal(t, 2, result.ResetCount)
+	result, err = r.ApplyEvent(ctx, events[8], now.Add(time.Minute), now)
+	require.NoError(t, err)
+	require.Equal(t, "cancelled", result.Status)
+	var untouched int
+	require.NoError(t, db.QueryRow(`SELECT count(*) FROM user_subscriptions WHERE id IN(5,6) AND weekly_usage_usd=20`).Scan(&untouched))
+	require.Equal(t, 2, untouched)
+	// Pruning unavailable B must leave A intact even with another active source.
+	_, err = db.Exec(`UPDATE accounts SET status='disabled' WHERE id=8`)
+	require.NoError(t, err)
+	require.NoError(t, r.ClearBaseline(ctx))
+	require.NoError(t, db.QueryRow(`SELECT count(*) FROM carpool_reset_account_monitors WHERE account_id=9 AND baseline IS NOT NULL`).Scan(&baselines))
+	require.Equal(t, 1, baselines)
+}
+
+func TestCarpoolResetMonitorPostgresLegacyGlobalTargets(t *testing.T) {
+	db := carpoolMonitorTestDB(t)
+	_, err := db.Exec(`INSERT INTO groups VALUES(30,'active','openai','subscription',0,NULL,100),(40,'active','openai','standard',0,NULL,100);
+ INSERT INTO accounts(id,platform,type,status,credentials) VALUES(8,'openai','oauth','active','{"chatgpt_account_id":"other"}');
+ INSERT INTO account_groups VALUES(8,30),(9,40);
+ INSERT INTO user_subscriptions(id,user_id,group_id,status) VALUES(5,5,30,'active'),(6,6,40,'active')`)
+	require.NoError(t, err)
+	// Seed a historical event carrying the old global snapshot. Ordinary groups'
+	// original binding cannot be proven; only its unchanged source group is safe.
+	var event int64
+	require.NoError(t, db.QueryRow(`INSERT INTO carpool_subscription_reset_events(event_key,group_id,account_id,identity_hash,reason,observed_at,expires_at,source_revision)
+ VALUES('legacy',10,9,$1,'vote',now(),now()+interval '1 day',(SELECT count(*) FROM carpool_reset_source_changes)) RETURNING id`, service.CarpoolResetIdentityHash("shared")).Scan(&event))
+	_, err = db.Exec(`INSERT INTO carpool_reset_monitor(id) VALUES(1) ON CONFLICT DO NOTHING`)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO carpool_subscription_reset_targets(event_id,subscription_id,user_id,group_id,starts_at) SELECT $1,id,user_id,group_id,starts_at FROM user_subscriptions WHERE status='active'`, event)
+	require.NoError(t, err)
+	r := NewCarpoolResetMonitorRepository(db)
+	now := time.Now()
+	result, err := r.ApplyEvent(context.Background(), event, now, now)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.ResetCount)
+	require.Equal(t, 4, result.SkippedCount)
+	var ids string
+	require.NoError(t, db.QueryRow(`SELECT string_agg(id::text,',' ORDER BY id) FROM user_subscriptions WHERE weekly_usage_usd=0`).Scan(&ids))
+	require.Equal(t, "1", ids)
+}
+
+func TestCarpoolResetMonitorPostgresLegacyMigration(t *testing.T) {
+	db := carpoolMonitorSchemaDB(t, false)
+	now := time.Now().UTC().Truncate(time.Second)
+	observation := service.CarpoolResetObservation{ObservedAt: now, ResetAt: now.Add(time.Hour), Utilization: 20}
+	baseline, err := json.Marshal(service.CarpoolResetBaseline{Observation: observation, Since: now})
+	require.NoError(t, err)
+	identity := service.CarpoolResetIdentityHash("shared")
+	_, err = db.Exec(`INSERT INTO carpool_reset_monitor(id,group_id,account_id,identity_hash,baseline,source_revision) VALUES(1,10,9,$1,$2::jsonb,0)`, identity, string(baseline))
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO carpool_reset_votes(group_id,account_id,created_by,creation_key,eligibility,observation,required_count,status,request_id)
+ VALUES(10,9,1,'00000000-0000-4000-8000-000000000001','{}','{}',4,'executing','never-dispatched');
+ INSERT INTO carpool_reset_votes(group_id,account_id,created_by,creation_key,eligibility,observation,required_count,status,request_id,dispatched_at)
+ VALUES(20,8,2,'00000000-0000-4000-8000-000000000002','{}','{}',4,'awaiting_confirmation','uncertain',now());
+ INSERT INTO quota_reset_operations(account_id,request_id,credit_id) VALUES(9,'never-dispatched','card1'),(8,'uncertain','card2');
+ INSERT INTO carpool_reset_vote_requests(created_by,creation_key,proposal_id) SELECT created_by,creation_key,id FROM carpool_reset_votes;
+ INSERT INTO carpool_reset_vote_approvals(proposal_id,user_id) SELECT id,created_by FROM carpool_reset_votes;
+ INSERT INTO carpool_reset_vote_targets(proposal_id,subscription_id,user_id,group_id,starts_at) SELECT 2,id,user_id,group_id,starts_at FROM user_subscriptions`)
+	require.NoError(t, err)
+	migration, err := migrations.FS.ReadFile("249_custom_carpool_account_scope.sql")
+	require.NoError(t, err)
+	_, err = db.Exec(string(migration))
+	require.NoError(t, err)
+	var proposal, operation string
+	require.NoError(t, db.QueryRow(`SELECT p.status,o.status FROM carpool_reset_votes p JOIN quota_reset_operations o ON o.account_id=p.account_id WHERE p.id=1`).Scan(&proposal, &operation))
+	require.Equal(t, "invalidated", proposal)
+	require.Equal(t, "failed", operation)
+	require.NoError(t, db.QueryRow(`SELECT p.status,o.status FROM carpool_reset_votes p JOIN quota_reset_operations o ON o.account_id=p.account_id WHERE p.id=2`).Scan(&proposal, &operation))
+	require.Equal(t, "awaiting_confirmation", proposal)
+	require.Equal(t, "pending", operation)
+	var count int
+	for _, table := range []string{"carpool_reset_vote_requests", "carpool_reset_vote_approvals"} {
+		require.NoError(t, db.QueryRow(`SELECT count(*) FROM `+table).Scan(&count))
+		require.Equal(t, 2, count)
+	}
+	require.NoError(t, db.QueryRow(`SELECT count(*) FROM carpool_reset_vote_targets WHERE binding_revision IS NOT NULL`).Scan(&count))
+	require.Zero(t, count)
+	var inherited []byte
+	var version int
+	require.NoError(t, db.QueryRow(`SELECT baseline,scope_version FROM carpool_reset_account_monitors WHERE account_id=9`).Scan(&inherited, &version))
+	require.JSONEq(t, string(baseline), string(inherited))
+	require.Equal(t, 1, version)
+	// Churn on B after migration cannot erase A's inherited observation.
+	_, err = db.Exec(`INSERT INTO accounts(id,platform,type,status,credentials) VALUES(8,'openai','oauth','active','{"chatgpt_account_id":"other"}'); UPDATE accounts SET status='disabled' WHERE id=8`)
+	require.NoError(t, err)
+	r := NewCarpoolResetMonitorRepository(db)
+	source, err := r.Source(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, source)
+	event, err := r.Observe(context.Background(), *source, service.CarpoolResetObservation{ObservedAt: now.Add(time.Minute), ResetAt: now.Add(7 * 24 * time.Hour), Utilization: 0})
+	require.NoError(t, err)
+	require.NotNil(t, event, "unchanged legacy baseline must carry over into per-account monitoring")
+	require.NoError(t, db.QueryRow(`SELECT scope_version FROM carpool_reset_account_monitors WHERE account_id=9`).Scan(&version))
+	require.Equal(t, 1, version)
 }

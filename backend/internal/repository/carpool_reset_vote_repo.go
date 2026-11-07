@@ -49,36 +49,36 @@ func voteOwnerGroup(ctx context.Context, q carpoolResetQuerier, user, subscripti
 }
 
 func voteEligibility(ctx context.Context, q carpoolResetQuerier, group int64) (*service.CarpoolVoteEligibility, error) {
-	e := &service.CarpoolVoteEligibility{GroupID: group}
-	err := q.QueryRowContext(ctx, `SELECT COALESCE(carpool_members,0) FROM groups WHERE id=$1 AND deleted_at IS NULL AND status='active'`, group).Scan(&e.RequiredCount)
+	e := &service.CarpoolVoteEligibility{GroupID: group, ScopeVersion: 1}
+	var account int64
+	err := q.QueryRowContext(ctx, `SELECT a.id FROM groups g JOIN account_groups ag ON ag.group_id=g.id JOIN accounts a ON a.id=ag.account_id
+ WHERE g.id=$1 AND g.deleted_at IS NULL AND g.status='active' AND g.platform='openai' AND g.subscription_type='subscription' AND a.deleted_at IS NULL
+ AND (SELECT count(*) FROM account_groups other JOIN accounts b ON b.id=other.account_id WHERE other.group_id=g.id AND b.deleted_at IS NULL)=1`, group).Scan(&account)
 	if errors.Is(err, sql.ErrNoRows) {
-		e.BlockedReason = "not_configured"
+		e.BlockedReason = "account_unavailable"
 		return e, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	e.Source, err = carpoolResetSource(ctx, q)
+	e.Source, err = carpoolResetSourceForAccount(ctx, q, account)
 	if err != nil {
 		return nil, err
 	}
-	if e.Source == nil || e.Source.GroupID != group {
-		e.Source = nil
+	if e.Source == nil {
 		e.BlockedReason = "account_unavailable"
-	}
-	if e.RequiredCount < 2 || e.RequiredCount > 5 {
-		e.BlockedReason = "not_configured"
+		return e, nil
 	}
 	rows, err := q.QueryContext(ctx, `SELECT DISTINCT ON(s.user_id) s.user_id,s.id,s.starts_at FROM user_subscriptions s
-		JOIN users u ON u.id=s.user_id WHERE s.group_id=$1 AND s.deleted_at IS NULL AND s.status='active'
-		AND s.expires_at>clock_timestamp() AND s.starts_at<=clock_timestamp() AND u.deleted_at IS NULL AND u.status='active'
-		ORDER BY s.user_id,s.id`, group)
+ JOIN users u ON u.id=s.user_id WHERE s.group_id IN (`+carpoolAccountSubscriptionGroups+`)
+ AND s.deleted_at IS NULL AND s.status='active' AND s.expires_at>clock_timestamp() AND s.starts_at<=clock_timestamp()
+ AND u.deleted_at IS NULL AND u.status='active' ORDER BY s.user_id,s.id`, account)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		var m service.CarpoolVoteMember
-		if err := rows.Scan(&m.UserID, &m.SubscriptionID, &m.StartsAt); err != nil {
+		if err = rows.Scan(&m.UserID, &m.SubscriptionID, &m.StartsAt); err != nil {
 			_ = rows.Close()
 			return nil, err
 		}
@@ -89,21 +89,20 @@ func voteEligibility(ctx context.Context, q carpoolResetQuerier, group int64) (*
 	if err != nil {
 		return nil, err
 	}
-	if len(e.Members) != e.RequiredCount && e.BlockedReason == "" {
+	e.RequiredCount = len(e.Members)
+	if e.RequiredCount == 0 {
 		e.BlockedReason = "member_count_mismatch"
 	}
-	if err = q.QueryRowContext(ctx, `SELECT count(*) FROM carpool_vote_membership_changes WHERE group_id=$1`, group).Scan(&e.MembershipRevision); err != nil {
+	if err = q.QueryRowContext(ctx, `SELECT count(*) FROM carpool_vote_membership_changes WHERE group_id IN (`+carpoolAccountSubscriptionGroups+`)`, account).Scan(&e.MembershipRevision); err != nil {
 		return nil, err
 	}
-	if e.Source != nil {
-		err = q.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM carpool_account_reset_receipts WHERE account_id=$1),
-			(SELECT count(*) FROM quota_reset_operations WHERE account_id=$1 AND status='succeeded')`, e.Source.AccountID).Scan(&e.ReceiptCount, &e.OperationCount)
-	}
+	err = q.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM carpool_account_reset_receipts WHERE account_id=$1),
+ (SELECT count(*) FROM quota_reset_operations WHERE account_id=$1 AND status='succeeded')`, account).Scan(&e.ReceiptCount, &e.OperationCount)
 	return e, err
 }
 
 func voteEligibilityReason(old, current service.CarpoolVoteEligibility) string {
-	if !sameCarpoolResetSource(old.Source, current.Source) {
+	if old.ScopeVersion != current.ScopeVersion || !sameCarpoolResetSource(old.Source, current.Source) {
 		return "source_changed"
 	}
 	if old.ReceiptCount != current.ReceiptCount || old.OperationCount != current.OperationCount {
@@ -274,7 +273,11 @@ func (r *carpoolResetVoteRepository) mutate(ctx context.Context, user, subscript
 	if err != nil {
 		return nil, err
 	}
-	p, err := scanVote(tx.QueryRowContext(ctx, `SELECT `+voteColumns+` FROM carpool_reset_votes WHERE group_id=$1 ORDER BY id DESC LIMIT 1 FOR UPDATE`, group))
+	var account int64
+	if e.Source != nil {
+		account = e.Source.AccountID
+	}
+	p, err := scanVote(tx.QueryRowContext(ctx, `SELECT `+voteColumns+` FROM carpool_reset_votes WHERE account_id=$1 ORDER BY id DESC LIMIT 1 FOR UPDATE`, account))
 	if err != nil {
 		return nil, err
 	}
@@ -287,7 +290,7 @@ func (r *carpoolResetVoteRepository) mutate(ctx context.Context, user, subscript
 			return nil, err
 		}
 		if replay != nil {
-			if replay.Eligibility.GroupID != group {
+			if replay.Eligibility.Source == nil || replay.Eligibility.Source.AccountID != account {
 				return nil, service.ErrSubscriptionNotFound
 			}
 			if err = validateVote(ctx, tx, replay, e); err != nil {
@@ -311,6 +314,12 @@ func (r *carpoolResetVoteRepository) mutate(ctx context.Context, user, subscript
 				if err != nil {
 					return nil, err
 				}
+				if e.RequiredCount == 1 {
+					if _, err = tx.ExecContext(ctx, `UPDATE carpool_reset_votes SET status='executing',updated_at=clock_timestamp() WHERE id=$1`, p.ID); err != nil {
+						return nil, err
+					}
+					p.Status = "executing"
+				}
 			} else if view.CanCreate {
 				return nil, infraerrors.Conflict("RESET_VOTE_SOURCE_CHANGED", "Shared subscription changed; refresh and try again")
 			}
@@ -324,8 +333,8 @@ func (r *carpoolResetVoteRepository) mutate(ctx context.Context, user, subscript
 	}
 	if agree > 0 {
 		if p == nil || p.ID != agree {
-			// Terminal proposal retries are harmless, but never target another group's proposal.
-			p, err = scanVote(tx.QueryRowContext(ctx, `SELECT `+voteColumns+` FROM carpool_reset_votes WHERE id=$1 AND group_id=$2 FOR UPDATE`, agree, group))
+			// Terminal proposal retries are harmless, but never target another account's proposal.
+			p, err = scanVote(tx.QueryRowContext(ctx, `SELECT `+voteColumns+` FROM carpool_reset_votes WHERE id=$1 AND account_id=$2 FOR UPDATE`, agree, account))
 			if err != nil {
 				return nil, err
 			}

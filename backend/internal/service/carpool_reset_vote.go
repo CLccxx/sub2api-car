@@ -105,6 +105,9 @@ func (s *CarpoolResetVoteService) Create(ctx context.Context, user, subscription
 		return nil, safeResetVoteError(err)
 	}
 	v, err := s.repo.Create(ctx, user, subscription, key, *e, o)
+	if err == nil && v != nil && v.Proposal != nil && v.Proposal.Status == "executing" {
+		s.signal()
+	}
 	return v, safeResetVoteError(err)
 }
 

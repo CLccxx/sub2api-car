@@ -7,20 +7,15 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
-	"github.com/Wei-Shaw/sub2api/migrations"
 	"github.com/stretchr/testify/require"
 )
 
 func quotaResetVoteTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	db := quotaResetTestDB(t)
-	_, err := db.Exec(`CREATE TABLE users(id bigint PRIMARY KEY,status text,deleted_at timestamptz)`)
-	require.NoError(t, err)
-	migration, err := migrations.FS.ReadFile("242_custom_carpool_reset_voting.sql")
-	require.NoError(t, err)
-	_, err = db.Exec(string(migration))
-	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO carpool_reset_votes(group_id,account_id,created_by,creation_key,
+	// The shared fixture already includes users and the latest vote migrations.
+	// Reapplying 242 here would overwrite the account-scoped triggers from 249.
+	_, err := db.Exec(`INSERT INTO carpool_reset_votes(group_id,account_id,created_by,creation_key,
 		eligibility,observation,required_count,credit_id,request_id)
 		VALUES(10,9,1,'00000000-0000-4000-8000-000000000001','{}','{}',2,'credit-a','request-a')`)
 	require.NoError(t, err)
