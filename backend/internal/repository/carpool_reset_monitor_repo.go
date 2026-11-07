@@ -291,8 +291,8 @@ func (r *carpoolResetMonitorRepository) RecordResetReceipt(ctx context.Context, 
 	if err = tx.QueryRowContext(ctx, `SELECT id FROM carpool_reset_monitor WHERE id=1 FOR UPDATE`).Scan(&id); err != nil {
 		return err
 	}
-	result, err := tx.ExecContext(ctx, `INSERT INTO carpool_account_reset_receipts(account_id,identity_hash,request_hash,occurred_at,windows_reset)
-		VALUES($1,$2,$3,$4,$5) ON CONFLICT(account_id,identity_hash,request_hash) DO NOTHING`, accountID, identity, request, occurred.UTC().Truncate(time.Second), windows)
+	result, err := tx.ExecContext(ctx, `INSERT INTO carpool_account_reset_receipts(account_id,identity_hash,request_hash,occurred_at,windows_reset,cost_reset_at)
+		VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(account_id,identity_hash,request_hash) DO NOTHING`, accountID, identity, request, occurred.UTC().Truncate(time.Second), windows, occurred.UTC())
 	if err != nil {
 		return err
 	}

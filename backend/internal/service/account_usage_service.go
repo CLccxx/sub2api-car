@@ -146,12 +146,16 @@ type WindowStats struct {
 
 // UsageProgress 使用量进度
 type UsageProgress struct {
-	Utilization      float64      `json:"utilization"`            // 使用率百分比 (0-100+，100表示100%)
-	ResetsAt         *time.Time   `json:"resets_at"`              // 重置时间
-	RemainingSeconds int          `json:"remaining_seconds"`      // 距重置剩余秒数
-	WindowStats      *WindowStats `json:"window_stats,omitempty"` // 窗口期统计（从窗口开始到当前的使用量）
-	UsedRequests     int64        `json:"used_requests,omitempty"`
-	LimitRequests    int64        `json:"limit_requests,omitempty"`
+	EstimatedTotalCost *float64     `json:"estimated_total_cost"`
+	CreditsUsedCost    *float64     `json:"credits_used_cost"`
+	EstimateFrozen     bool         `json:"estimate_frozen"`
+	EstimateSource     string       `json:"estimate_source,omitempty"`
+	Utilization        float64      `json:"utilization"`            // 使用率百分比 (0-100+，100表示100%)
+	ResetsAt           *time.Time   `json:"resets_at"`              // 重置时间
+	RemainingSeconds   int          `json:"remaining_seconds"`      // 距重置剩余秒数
+	WindowStats        *WindowStats `json:"window_stats,omitempty"` // 窗口期统计（从窗口开始到当前的使用量）
+	UsedRequests       int64        `json:"used_requests,omitempty"`
+	LimitRequests      int64        `json:"limit_requests,omitempty"`
 }
 
 // AntigravityModelQuota Antigravity 单个模型的配额信息
@@ -744,6 +748,21 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 					usage.UpdatedAt = &now
 				}
 				applyExtraToUsage(usage, account.Extra, now)
+			}
+		}
+	}
+
+	if !account.IsShadow() && account.IsOpenAIOAuth() && s.openAIQuotaService != nil && s.openAIQuotaService.subscriptionCost != nil {
+		if quota, err := s.openAIQuotaService.QueryUsageReadOnly(ctx, account.ID); err == nil && quota != nil {
+			if observation, ok := ReadCarpoolResetObservation(quota, account.GetCredential("chatgpt_account_id"), now); ok {
+				usage.UpdatedAt = &observation.ObservedAt
+				usage.SevenDay = &UsageProgress{Utilization: observation.Utilization, ResetsAt: &observation.ResetAt, RemainingSeconds: int(observation.ResetAt.Sub(now).Seconds())}
+				if estimate := quota.SubscriptionCost; estimate != nil {
+					usage.SevenDay.EstimatedTotalCost = estimate.EstimatedTotalCost
+					usage.SevenDay.CreditsUsedCost = estimate.CreditsUsedCost
+					usage.SevenDay.EstimateFrozen = estimate.EstimateFrozen
+					usage.SevenDay.EstimateSource = estimate.EstimateSource
+				}
 			}
 		}
 	}

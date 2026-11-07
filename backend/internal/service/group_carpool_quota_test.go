@@ -152,6 +152,8 @@ func TestCarpoolQuotaRefresh(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			_, _, accounts, quota, _, now := sharedUsageFixture(t)
 			stats := &carpoolStats{cost: 1374.65 / 4}
+			estimate := 1374.65
+			quota.payload.SubscriptionCost = &SubscriptionCostEstimate{EstimatedTotalCost: &estimate, EstimateSource: "dynamic"}
 			repo := &carpoolRepoStub{targets: []CarpoolQuotaTarget{{GroupID: 10, Members: 4, Revision: *now}}, applied: true}
 			cache := &carpoolCacheSpy{}
 			svc := NewCarpoolQuotaService(repo, accounts, quota, stats, cache)
@@ -163,12 +165,15 @@ func TestCarpoolQuotaRefresh(t *testing.T) {
 				quota.err = errors.New("upstream unavailable")
 			case "stats failure":
 				stats.err = errors.New("stats unavailable")
+				quota.payload.SubscriptionCost = nil
 			case "missing":
 				quota.payload.RateLimit = nil
 			case "zero":
 				quota.payload.RateLimit.SecondaryWindow.UsedPercent = 0
+				quota.payload.SubscriptionCost = nil
 			case "small":
 				stats.cost = 1
+				estimate = 4
 			case "stale":
 				quota.payload.FetchedAt = now.Add(-time.Hour).Unix()
 			case "no timestamp":
@@ -208,6 +213,8 @@ func TestCarpoolQuotaRefreshRoundedLimitPreservesAvailableQuota(t *testing.T) {
 	_, _, accounts, quota, _, now := sharedUsageFixture(t)
 	quota.payload.RateLimit.SecondaryWindow.UsedPercent = 99
 	stats := &carpoolStats{cost: 1000}
+	estimate := 1000.0 / 0.99
+	quota.payload.SubscriptionCost = &SubscriptionCostEstimate{EstimatedTotalCost: &estimate, EstimateSource: "dynamic"}
 	repo := &carpoolRepoStub{targets: []CarpoolQuotaTarget{{GroupID: 10, Members: 4, Revision: *now}}, applied: true}
 	svc := NewCarpoolQuotaService(repo, accounts, quota, stats, nil)
 	svc.now = func() time.Time { return *now }
@@ -227,6 +234,8 @@ func TestCarpoolQuotaRefreshReconnectedAccountUsesBonusWithoutMinimumFloor(t *te
 	window := quota.payload.RateLimit.SecondaryWindow
 	window.UsedPercent = 8
 	stats := &carpoolStats{cost: 5.33 * 0.08}
+	estimate := 5.33
+	quota.payload.SubscriptionCost = &SubscriptionCostEstimate{EstimatedTotalCost: &estimate, EstimateSource: "dynamic"}
 	repo := &carpoolRepoStub{targets: []CarpoolQuotaTarget{{GroupID: 10, Members: 3, Revision: *now}}, applied: true}
 	cache := &carpoolCacheSpy{}
 	svc := NewCarpoolQuotaService(repo, accounts, quota, stats, cache)
@@ -237,8 +246,8 @@ func TestCarpoolQuotaRefreshReconnectedAccountUsesBonusWithoutMinimumFloor(t *te
 	require.Equal(t, 1, repo.writes)
 	require.Equal(t, 103.33, repo.limit)
 	require.Equal(t, int64(42), repo.accountID)
-	require.Equal(t, int64(42), stats.accountID)
-	require.Equal(t, time.Unix(window.ResetAt, 0).UTC().Add(-7*24*time.Hour), stats.windowStart)
+	require.Zero(t, stats.accountID, "quota must use the shared subscription estimate")
+	require.True(t, stats.windowStart.IsZero())
 	require.Equal(t, []int64{10}, cache.ids)
 	view := querySharedAccountUsage(context.Background(), accounts.accounts[0].ID, quota, stats, svc.now).view
 	require.NotNil(t, view.SevenDay)

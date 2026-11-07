@@ -1737,8 +1737,14 @@ export default {
         grokLastHeadersSeen: 'Headers {time}',
         passiveSampled: 'Passive',
         activeQuery: 'Query',
-        estimatedTotalCost: 'Est. total ${cost}',
-        estimatedTotalCostTooltip: 'Estimated total cost at 100% utilization, based on current window cost and utilization'
+        estimatedTotalCost: 'Subscription estimate',
+        estimatedTotalCostTooltip: 'Estimated from seven-day cost and utilization until first exhaustion, then fixed for the cycle.',
+        creditsUsedCost: 'Credit spend',
+        creditsUsedCostHint: 'Account cost above the subscription baseline in this cycle. Excluded from carpool weekly limits; this is not the remaining credits balance.',
+        estimateFrozen: 'Fixed',
+        frozenEstimateHint: 'The subscription estimate is fixed for this cycle. Credit spending does not increase it or carpool weekly limits.',
+        legacyEstimate: 'Default baseline',
+        legacyEstimateHint: 'No pre-exhaustion record exists for this cycle. A $1,600 subscription baseline applies until the next reset.'
       },
       openaiReferral: {
         available: 'Invites left',

@@ -85,13 +85,19 @@ func TestOfficial018ToCar019PostgresPreservesData(t *testing.T) {
 		"247_scoped_admin_api_keys.sql":         true,
 		"248_group_image_count_billing.sql":     true,
 		"249_custom_carpool_account_scope.sql":  true,
+		"250_custom_subscription_cost.sql":      true,
 	})
 }
 
 func TestCar019ToAccountScopedCarPostgresPreservesData(t *testing.T) {
 	assertCarMigrationPreservesData(t, map[string]bool{
 		"249_custom_carpool_account_scope.sql": true,
+		"250_custom_subscription_cost.sql":     true,
 	})
+}
+
+func TestCarAccountScopedToSubscriptionCostPostgresPreservesData(t *testing.T) {
+	assertCarMigrationPreservesData(t, map[string]bool{"250_custom_subscription_cost.sql": true})
 }
 
 func assertCarMigrationPreservesData(t *testing.T, pending map[string]bool) {
@@ -172,6 +178,9 @@ func assertCarMigrationPreservesData(t *testing.T, pending map[string]bool) {
 		out := map[string]string{}
 		for _, table := range []string{"users", "groups", "proxies", "accounts", "account_groups", "user_allowed_groups", "api_keys", "user_subscriptions", "usage_logs", "auth_identities", "settings", "security_secrets"} {
 			expression := "to_jsonb(t)"
+			if table == "usage_logs" {
+				expression += " - 'account_cost_started_at' - 'account_cost_observed_at' - 'account_cost_identity_hash' - 'account_cost_pending_id'"
+			}
 			if table == "groups" {
 				expression += " - 'carpool_members' - 'carpool_quota_synced_at' - 'image_count_billing'"
 			}
@@ -195,6 +204,16 @@ func assertCarMigrationPreservesData(t *testing.T, pending map[string]bool) {
 		}
 		require.NoError(t, rows.Err())
 		return out
+	}
+	operationCounts := map[string]int{}
+	for _, table := range []string{"carpool_reset_monitor", "carpool_account_reset_receipts", "carpool_subscription_reset_events", "carpool_subscription_reset_targets", "carpool_reset_source_changes", "quota_reset_operations", "carpool_reset_votes", "carpool_reset_vote_approvals", "carpool_reset_vote_requests", "carpool_reset_vote_targets", "carpool_vote_membership_changes", "scoped_admin_api_keys"} {
+		var exists bool
+		require.NoError(t, db.QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL`, table).Scan(&exists))
+		if exists {
+			var count int
+			require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM `+pq.QuoteIdentifier(table)).Scan(&count))
+			operationCounts[table] = count
+		}
 	}
 	before := snapshot()
 	historical := ledger()
@@ -258,6 +277,9 @@ func assertCarMigrationPreservesData(t *testing.T, pending map[string]bool) {
 	require.ErrorIs(t, err, service.ErrRefreshTokenNotFound, "consumed refresh token must no longer be reusable")
 	require.Equal(t, before, snapshot(), "session validation and refresh must not rewrite preserved database rows")
 
+	var historicalAttributionIsNull bool
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT account_cost_started_at IS NULL AND account_cost_observed_at IS NULL AND account_cost_identity_hash IS NULL AND account_cost_pending_id IS NULL FROM usage_logs WHERE id=9007`).Scan(&historicalAttributionIsNull))
+	require.True(t, historicalAttributionIsNull, "upgrade must not invent historical attribution")
 	var members int
 	var synced sql.NullTime
 	var imageCountBilling bool
@@ -268,7 +290,7 @@ func assertCarMigrationPreservesData(t *testing.T, pending map[string]bool) {
 	for _, table := range []string{"carpool_reset_monitor", "carpool_account_reset_receipts", "carpool_subscription_reset_events", "carpool_subscription_reset_targets", "carpool_reset_source_changes", "quota_reset_operations", "carpool_reset_votes", "carpool_reset_vote_approvals", "carpool_reset_vote_requests", "carpool_reset_vote_targets", "carpool_vote_membership_changes", "scoped_admin_api_keys"} {
 		var count int
 		require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM `+pq.QuoteIdentifier(table)).Scan(&count), table)
-		require.Zero(t, count, "migration must not invent an operation or admin key: %s", table)
+		require.Equal(t, operationCounts[table], count, "migration must preserve operation/admin key counts: %s", table)
 	}
 	for _, trigger := range []string{"carpool_reset_account_changed", "carpool_reset_group_changed", "carpool_reset_binding_changed", "carpool_vote_subscription_changed", "carpool_vote_user_changed"} {
 		var count int

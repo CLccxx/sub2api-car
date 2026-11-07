@@ -37,6 +37,9 @@ type SharedUsageWindow struct {
 	Utilization        float64    `json:"utilization"`
 	ResetsAt           *time.Time `json:"resets_at"`
 	EstimatedTotalCost *float64   `json:"estimated_total_cost"`
+	CreditsUsedCost    *float64   `json:"credits_used_cost"`
+	EstimateFrozen     bool       `json:"estimate_frozen"`
+	EstimateSource     string     `json:"estimate_source,omitempty"`
 }
 
 type sharedUsageQuotaReader interface {
@@ -232,14 +235,11 @@ func querySharedAccountUsage(ctx context.Context, accountID int64, quota sharedU
 				continue
 			}
 			view := &SharedUsageWindow{Utilization: window.UsedPercent, ResetsAt: resetsAt}
-			if resetsAt != nil && window.UsedPercent > 0 && statsReader != nil {
-				stats, err := statsReader.GetAccountWindowStats(ctx, accountID, resetsAt.Add(-7*24*time.Hour))
-				if err == nil && stats != nil && validSharedUsageNumber(stats.Cost) && stats.Cost > 0 {
-					estimate := stats.Cost * 100 / window.UsedPercent
-					if validSharedUsageNumber(estimate) {
-						view.EstimatedTotalCost = &estimate
-					}
-				}
+			if estimate := usage.SubscriptionCost; estimate != nil && resetsAt != nil {
+				view.EstimatedTotalCost = estimate.EstimatedTotalCost
+				view.CreditsUsedCost = estimate.CreditsUsedCost
+				view.EstimateFrozen = estimate.EstimateFrozen
+				view.EstimateSource = estimate.EstimateSource
 			}
 			entry.view.SevenDay = view
 			break

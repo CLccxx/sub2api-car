@@ -37,15 +37,26 @@
         <div class="min-w-0">
           <dt class="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
             {{ t('userSubscriptions.sharedUsage.estimatedTotalCost') }}
-            <HelpTooltip :content="t('userSubscriptions.sharedUsage.estimateHint')" />
+            <HelpTooltip :content="estimateHint" />
           </dt>
-          <dd data-test="shared-usage-estimate" class="mt-1 break-all font-medium tabular-nums text-gray-900 dark:text-gray-100">{{ estimateText }}</dd>
+          <dd class="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-1 font-medium text-gray-900 dark:text-gray-100">
+            <span data-test="shared-usage-estimate" class="break-all tabular-nums">{{ estimateText }}</span>
+            <span v-if="estimateFrozen" data-test="shared-usage-estimate-frozen" class="text-xs font-normal text-gray-600 dark:text-gray-300">{{ t('userSubscriptions.sharedUsage.estimateFrozen') }}</span>
+          </dd>
         </div>
         <div class="min-w-0">
+          <dt class="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('userSubscriptions.sharedUsage.creditsUsedCost') }}
+            <HelpTooltip :content="t('userSubscriptions.sharedUsage.creditsUsedCostHint')" />
+          </dt>
+          <dd data-test="shared-usage-credit-cost" class="mt-1 break-all font-medium tabular-nums text-gray-900 dark:text-gray-100">{{ creditCostText }}</dd>
+        </div>
+        <div class="col-span-2 flex min-w-0 flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
           <dt class="text-xs text-gray-500 dark:text-gray-400">{{ t('userSubscriptions.sharedUsage.resetIn') }}</dt>
-          <dd data-test="shared-usage-countdown" class="mt-1 break-words font-medium tabular-nums text-gray-900 dark:text-gray-100">{{ countdown }}</dd>
+          <dd data-test="shared-usage-countdown" class="break-words text-xs tabular-nums text-gray-700 dark:text-gray-300">{{ countdown }}</dd>
         </div>
       </dl>
+      <p v-if="legacyEstimate" data-test="shared-usage-legacy-estimate" class="text-xs text-gray-600 dark:text-gray-300">{{ t('userSubscriptions.sharedUsage.legacyEstimateHint') }}</p>
     </template>
     <ResetVotePanel
       v-if="!expired"
@@ -107,6 +118,14 @@ const estimateText = computed(() => {
   const value = usage.value?.seven_day?.estimated_total_cost
   return !rolledOver.value && typeof value === 'number' && Number.isFinite(value) && value >= 0 ? `$${value.toFixed(2)}` : unknown.value
 })
+const creditCostText = computed(() => {
+  const value = usage.value?.seven_day?.credits_used_cost
+  return !rolledOver.value && typeof value === 'number' && Number.isFinite(value) && value >= 0 ? `$${value.toFixed(2)}` : unknown.value
+})
+const estimateFrozen = computed(() => !rolledOver.value && usage.value?.seven_day?.estimate_frozen === true && estimateText.value !== unknown.value)
+const legacyEstimate = computed(() => estimateFrozen.value && usage.value?.seven_day?.estimate_source === 'legacy_default')
+const estimateHint = computed(() => t(legacyEstimate.value ? 'userSubscriptions.sharedUsage.legacyEstimateHint'
+  : estimateFrozen.value ? 'userSubscriptions.sharedUsage.frozenEstimateHint' : 'userSubscriptions.sharedUsage.estimateHint'))
 const countdown = computed(() => {
   const reset = Date.parse(usage.value?.seven_day?.resets_at ?? '')
   if (!Number.isFinite(reset)) return unknown.value

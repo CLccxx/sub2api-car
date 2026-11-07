@@ -13,6 +13,39 @@ vi.mock('vue-i18n', async () => {
 })
 
 describe('UsageProgressBar', () => {
+  it('shows frozen subscription and credit costs even without window statistics', () => {
+    const wrapper = mount(UsageProgressBar, {
+      props: { label: '7d', utilization: 100, color: 'emerald', showCostBreakdown: true,
+        estimatedTotalCost: 2000, creditsUsedCost: 200, estimateFrozen: true, estimateSource: 'observed' }
+    })
+    expect(wrapper.get('[data-test="estimated-total-cost"]').text()).toContain('$2000.00')
+    expect(wrapper.get('[data-test="credits-used-cost"]').text()).toContain('$200.00')
+    expect(wrapper.get('[data-test="estimate-frozen"]').text()).toBe('admin.accounts.usageWindow.estimateFrozen')
+    expect(wrapper.find('[data-test="legacy-estimate"]').exists()).toBe(false)
+  })
+
+  it('labels the legacy baseline and never presents missing or invalid credit cost as zero', async () => {
+    const wrapper = mount(UsageProgressBar, {
+      props: { label: '7d', utilization: 100, color: 'emerald', showCostBreakdown: true,
+        estimatedTotalCost: 1600, creditsUsedCost: null, estimateFrozen: true, estimateSource: 'legacy_default' }
+    })
+    expect(wrapper.get('[data-test="legacy-estimate"]').attributes('title')).toBe('admin.accounts.usageWindow.legacyEstimateHint')
+    expect(wrapper.get('[data-test="credits-used-cost"]').text()).toContain('common.unknown')
+    await wrapper.setProps({ creditsUsedCost: Number.NaN, estimatedTotalCost: Number.POSITIVE_INFINITY })
+    expect(wrapper.text()).not.toMatch(/NaN|Infinity/)
+    expect(wrapper.get('[data-test="estimated-total-cost"]').text()).toContain('common.unknown')
+  })
+
+  it('hides expired cost figures and their frozen status until refreshed', async () => {
+    const wrapper = mount(UsageProgressBar, {
+      props: { label: '7d', utilization: 100, color: 'emerald', showCostBreakdown: true,
+        resetsAt: '2026-03-17T00:01:00Z', estimatedTotalCost: 2000, creditsUsedCost: 200, estimateFrozen: true }
+    })
+    expect(wrapper.get('[data-test="estimated-total-cost"]').text()).toContain('$2000.00')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(wrapper.get('[data-test="estimated-total-cost"]').text()).toContain('common.unknown')
+    expect(wrapper.find('[data-test="estimate-frozen"]').exists()).toBe(false)
+  })
   beforeEach(() => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-03-17T00:00:00Z'))

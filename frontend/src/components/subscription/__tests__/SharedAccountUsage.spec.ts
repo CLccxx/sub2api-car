@@ -14,7 +14,7 @@ vi.mock('vue-i18n', async importOriginal => ({
 const now = new Date('2026-10-08T12:00:00Z')
 const sample = () => ({
   status: 'ready', updated_at: now.toISOString(), refresh_available_at: new Date(now.getTime() + 60_000).toISOString(),
-  seven_day: { utilization: 37.5, resets_at: '2026-10-10T18:30:00Z', estimated_total_cost: 250.12 },
+  seven_day: { utilization: 37.5, resets_at: '2026-10-10T18:30:00Z', estimated_total_cost: 250.12, credits_used_cost: 0, estimate_frozen: false, estimate_source: 'dynamic' },
   reset_credits: 1, credits: { has_credits: true, unlimited: false, balance: '123.4500' }
 })
 const open = () => mount(SharedAccountUsage, { props: { subscriptionId: 12, expiresAt: '2099-01-01T00:00:00Z' }, global: { stubs: { Icon: true, HelpTooltip: true } } })
@@ -65,18 +65,48 @@ describe('SharedAccountUsage', () => {
     await flushPromises()
   })
 
-  it('shows five read-only account metrics without admin actions', async () => {
+  it('shows subscription and credit costs separately from the remaining points balance', async () => {
     const wrapper = open()
     await flushPromises()
     expect(getSharedAccountUsage).toHaveBeenCalledWith(12, { signal: expect.any(AbortSignal) })
     expect(wrapper.get('[data-test="shared-usage-percent"]').text()).toBe('37.5%')
     expect(wrapper.get('[data-test="shared-usage-estimate"]').text()).toBe('$250.12')
+    expect(wrapper.get('[data-test="shared-usage-credit-cost"]').text()).toBe('$0.00')
     expect(wrapper.get('[data-test="shared-usage-reset-credits"]').text()).toBe('1')
     expect(wrapper.get('[data-test="shared-usage-points"]').text()).toBe('123.4500')
     expect(wrapper.get('[data-test="shared-usage-countdown"]').text()).toContain('2d 6h 30m')
     expect(wrapper.text()).toContain('userSubscriptions.sharedUsage.updatedAt')
     expect(wrapper.findAll('button')).toHaveLength(1)
     expect(wrapper.findAll('a')).toHaveLength(0)
+  })
+
+  it('keeps the subscription baseline fixed as credit spending grows', async () => {
+    getSharedAccountUsage.mockResolvedValue({ ...sample(), seven_day: { ...sample().seven_day, utilization: 100, estimated_total_cost: 2000, credits_used_cost: 200, estimate_frozen: true, estimate_source: 'observed' } })
+    const wrapper = open()
+    await flushPromises()
+    expect(wrapper.get('[data-test="shared-usage-estimate"]').text()).toBe('$2000.00')
+    expect(wrapper.get('[data-test="shared-usage-credit-cost"]').text()).toBe('$200.00')
+    expect(wrapper.get('[data-test="shared-usage-estimate-frozen"]').text()).toBe('userSubscriptions.sharedUsage.estimateFrozen')
+    getSharedAccountUsage.mockResolvedValue({ ...sample(), seven_day: { ...sample().seven_day, utilization: 100, estimated_total_cost: 2000, credits_used_cost: 500, estimate_frozen: true, estimate_source: 'observed' } })
+    await wrapper.setProps({ refreshKey: 1 })
+    await flushPromises()
+    expect(wrapper.get('[data-test="shared-usage-estimate"]').text()).toBe('$2000.00')
+    expect(wrapper.get('[data-test="shared-usage-credit-cost"]').text()).toBe('$500.00')
+    expect(wrapper.get('[data-test="shared-usage-points"]').text()).toBe('123.4500')
+  })
+
+  it('explains the legacy 1600 baseline and clears it when the window expires', async () => {
+    getSharedAccountUsage.mockResolvedValue({ ...sample(), seven_day: { ...sample().seven_day, utilization: 100, resets_at: new Date(now.getTime() + 1000).toISOString(), estimated_total_cost: 1600, credits_used_cost: 655.46, estimate_frozen: true, estimate_source: 'legacy_default' } })
+    const wrapper = open()
+    await flushPromises()
+    expect(wrapper.get('[data-test="shared-usage-estimate"]').text()).toBe('$1600.00')
+    expect(wrapper.get('[data-test="shared-usage-credit-cost"]').text()).toBe('$655.46')
+    expect(wrapper.get('[data-test="shared-usage-legacy-estimate"]').text()).toBe('userSubscriptions.sharedUsage.legacyEstimateHint')
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(wrapper.get('[data-test="shared-usage-estimate"]').text()).toBe('userSubscriptions.sharedUsage.unknown')
+    expect(wrapper.get('[data-test="shared-usage-credit-cost"]').text()).toBe('userSubscriptions.sharedUsage.unknown')
+    expect(wrapper.find('[data-test="shared-usage-estimate-frozen"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="shared-usage-legacy-estimate"]').exists()).toBe(false)
   })
 
   it.each(['not_configured', 'multiple_accounts', 'unsupported_account'])('keeps tracking a dispatched vote when usage becomes %s', async status => {
@@ -122,7 +152,7 @@ describe('SharedAccountUsage', () => {
     getSharedAccountUsage.mockResolvedValue({ ...sample(), status: 'no_data', seven_day: null, credits: null, reset_credits: null })
     const wrapper = open()
     await flushPromises()
-    for (const metric of ['percent', 'estimate', 'reset-credits', 'points', 'countdown']) {
+    for (const metric of ['percent', 'estimate', 'credit-cost', 'reset-credits', 'points', 'countdown']) {
       expect(wrapper.get(`[data-test="shared-usage-${metric}"]`).text()).toBe('userSubscriptions.sharedUsage.unknown')
     }
     expect(wrapper.find('[role="progressbar"]').exists()).toBe(false)

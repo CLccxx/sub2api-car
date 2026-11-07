@@ -498,6 +498,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}
 			// 记录 Forward 前已写入字节数，Forward 后若增加则说明 SSE 内容已发，禁止 failover
 			writerSizeBeforeForward := c.Writer.Size()
+			forwardStart := time.Now()
 			if account.Platform == service.PlatformAntigravity {
 				result, err = h.antigravityGatewayService.ForwardGemini(
 					requestCtx,
@@ -627,7 +628,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						zap.Int64("account_id", account.ID),
 					).Error("gateway.record_usage_failed", zap.Error(err))
 				}
-			})
+			}, service.NewUsageAccountingScope(account, result, forwardStart))
 			return
 		}
 	}
@@ -916,6 +917,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}
 			// 记录 Forward 前已写入字节数，Forward 后若增加则说明 SSE 内容已发，禁止 failover
 			writerSizeBeforeForward := c.Writer.Size()
+			forwardStart := time.Now()
 			if account.Platform == service.PlatformAntigravity && account.Type != service.AccountTypeAPIKey {
 				result, err = h.antigravityGatewayService.Forward(requestCtx, c, account, attemptBody, hasBoundSession)
 			} else {
@@ -990,7 +992,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 							zap.Int64("account_id", account.ID),
 						).Error("gateway.record_usage_failed", zap.Error(err))
 					}
-				})
+				}, service.NewUsageAccountingScope(account, result, forwardStart))
 			}
 
 			if err != nil {
@@ -2561,12 +2563,13 @@ func (h *GatewayHandler) maybeLogCompatibilityFallbackMetrics(reqLog *zap.Logger
 	)
 }
 
-func (h *GatewayHandler) submitUsageRecordTask(parent context.Context, task service.UsageRecordTask) {
+func (h *GatewayHandler) submitUsageRecordTask(parent context.Context, task service.UsageRecordTask, scopes ...service.UsageAccountingScope) {
 	if task == nil {
 		return
 	}
+	task, registrationFailed := h.gatewayService.WrapSubscriptionCostAccountingTask(parent, task, scopes...)
 	task, abandon := wrapUsageRecordTaskContext(parent, task)
-	if h.usageRecordWorkerPool != nil {
+	if h.usageRecordWorkerPool != nil && !registrationFailed {
 		if mode := h.usageRecordWorkerPool.Submit(task); mode != service.UsageRecordSubmitModeDroppedStopped {
 			if mode.Dropped() {
 				abandon()
@@ -2594,12 +2597,13 @@ func (h *GatewayHandler) submitUsageRecordTask(parent context.Context, task serv
 }
 
 // submitMandatoryUsageRecordTask never silently drops billing work on pool overflow.
-func (h *GatewayHandler) submitMandatoryUsageRecordTask(parent context.Context, task service.UsageRecordTask) {
+func (h *GatewayHandler) submitMandatoryUsageRecordTask(parent context.Context, task service.UsageRecordTask, scopes ...service.UsageAccountingScope) {
 	if task == nil {
 		return
 	}
+	task, registrationFailed := h.gatewayService.WrapSubscriptionCostAccountingTask(parent, task, scopes...)
 	task, _ = wrapUsageRecordTaskContext(parent, task)
-	if h.usageRecordWorkerPool != nil {
+	if h.usageRecordWorkerPool != nil && !registrationFailed {
 		if mode := h.usageRecordWorkerPool.Submit(task); !mode.Dropped() {
 			return
 		}

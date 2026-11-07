@@ -58,7 +58,7 @@ func carpoolMonitorSchemaDB(t *testing.T, accountScope bool) *sql.DB {
 	require.NoError(t, err)
 	files := []string{"241_custom_quota_reset_operations.sql", "242_custom_carpool_reset_voting.sql"}
 	if accountScope {
-		files = append(files, "249_custom_carpool_account_scope.sql")
+		files = append(files, "249_custom_carpool_account_scope.sql", "250_custom_subscription_cost.sql")
 	}
 	for _, file := range files {
 		migration, err := migrations.FS.ReadFile(file)
