@@ -120,6 +120,7 @@ func provideCleanup(
 	openAIGateway *service.OpenAIGatewayService,
 	scheduledTestRunner *service.ScheduledTestRunnerService,
 	carpoolQuota *service.CarpoolQuotaService,
+	subscriptionCost *service.SubscriptionCostService,
 	carpoolResetMonitor *service.CarpoolResetMonitorService,
 	carpoolResetVote *service.CarpoolResetVoteService,
 	backupSvc *service.BackupService,
@@ -146,6 +147,12 @@ func provideCleanup(
 
 		// 应用层清理步骤可并行执行，基础设施资源（Redis/Ent）最后按顺序关闭。
 		parallelSteps := []cleanupStep{
+			{"SubscriptionCostService", func() error {
+				if subscriptionCost != nil {
+					subscriptionCost.Stop()
+				}
+				return nil
+			}},
 			{"CarpoolQuotaService", func() error {
 				if carpoolQuota != nil {
 					carpoolQuota.Stop()

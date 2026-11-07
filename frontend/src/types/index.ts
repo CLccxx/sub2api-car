@@ -1434,11 +1434,17 @@ export interface WindowStats {
   user_cost?: number
 }
 
+export type UsageEstimateSource = 'dynamic' | 'observed' | 'legacy_default'
+
 export interface UsageProgress {
   utilization: number // Percentage (0-100+, 100 = 100%)
   resets_at: string | null
   remaining_seconds: number
   window_stats?: WindowStats | null // 窗口期统计（从窗口开始到当前的使用量）
+  estimated_total_cost?: number | null // 订阅额度估算，满额后为本轮冻结值
+  credits_used_cost?: number | null // 本轮冻结后点数产生的账号费用
+  estimate_frozen?: boolean
+  estimate_source?: UsageEstimateSource
   used_requests?: number
   limit_requests?: number
 }

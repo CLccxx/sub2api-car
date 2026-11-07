@@ -198,11 +198,17 @@ func ProvideOpenAIQuotaService(
 	openAIGatewayService *OpenAIGatewayService,
 	resetMonitorRepo CarpoolResetMonitorRepository,
 	resetCoordinator QuotaResetCoordinator,
+	subscriptionCost *SubscriptionCostService,
+	gateway *GatewayService,
 ) *OpenAIQuotaService {
 	service := NewOpenAIQuotaService(accountRepo, proxyRepo, tokenProvider, privacyClientFactory, referralClient)
 	service.agentIdentityWS = openAIGatewayService
 	service.resetReceiptRecorder = resetMonitorRepo
 	service.resetCoordinator = resetCoordinator
+	service.subscriptionCost = subscriptionCost
+	openAIGatewayService.subscriptionCost = subscriptionCost
+	gateway.subscriptionCost = subscriptionCost
+	subscriptionCost.Start(service)
 	return service
 }
 
@@ -879,6 +885,7 @@ var ProviderSet = wire.NewSet(
 	NewRedeemService,
 	NewPromoService,
 	NewUsageService,
+	NewSubscriptionCostService,
 	NewDashboardService,
 	ProvidePricingService,
 	NewBillingService,

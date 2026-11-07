@@ -208,7 +208,12 @@ type UsageLog struct {
 	VideoResolution      *string
 	VideoDurationSeconds *int
 
-	CreatedAt time.Time
+	// Internal account-cost attribution; never projected to API consumers.
+	AccountCostPendingID    *int64     `json:"-"`
+	AccountCostStartedAt    *time.Time `json:"-"`
+	AccountCostObservedAt   *time.Time `json:"-"`
+	AccountCostIdentityHash *string    `json:"-"`
+	CreatedAt               time.Time
 
 	User         *User
 	APIKey       *APIKey

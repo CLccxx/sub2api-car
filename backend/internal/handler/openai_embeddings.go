@@ -297,7 +297,7 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 					zap.Int64("account_id", account.ID),
 				).Error("openai_embeddings.record_usage_failed", zap.Error(err))
 			}
-		})
+		}, service.NewUsageAccountingScope(account, result, forwardStart))
 		reqLog.Debug("openai_embeddings.request_completed",
 			zap.Int64("account_id", account.ID),
 			zap.Int("switch_count", switchCount),

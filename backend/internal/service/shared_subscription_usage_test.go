@@ -97,8 +97,10 @@ func sharedUsageFixture(t *testing.T) (*SharedSubscriptionUsageService, *sharedU
 	subs := &sharedUsageSubRepo{sub: &UserSubscription{ID: 1, UserID: 7, GroupID: 10, Group: &Group{ID: 10, Status: StatusActive}, Status: SubscriptionStatusActive, ExpiresAt: now.Add(24 * time.Hour)}}
 	accounts := &sharedUsageAccountRepo{t: t, accounts: []Account{{ID: 9, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive}}}
 	balance := "123.4500"
+	estimate := 50.0
 	quota := &sharedUsageQuotaStub{payload: &OpenAIQuotaUsage{
-		Email: "secret@example.test", UserID: "upstream-user", AccountID: "upstream-account", FetchedAt: now.Unix(),
+		SubscriptionCost: &SubscriptionCostEstimate{EstimatedTotalCost: &estimate, EstimateSource: "dynamic"},
+		Email:            "secret@example.test", UserID: "upstream-user", AccountID: "upstream-account", FetchedAt: now.Unix(),
 		RateLimit:             &OpenAIRateLimit{SecondaryWindow: &OpenAIRateLimitWindow{UsedPercent: 25, LimitWindowSeconds: 604800, ResetAt: now.Add(48 * time.Hour).Unix()}},
 		RateLimitResetCredits: &OpenAIRateLimitResetCredits{AvailableCount: 1},
 		Credits:               &OpenAICredits{HasCredits: true, Balance: &balance},
@@ -116,7 +118,7 @@ func TestSharedSubscriptionUsageProjection(t *testing.T) {
 	require.Equal(t, "ready", result.Status)
 	require.Equal(t, float64(25), result.SevenDay.Utilization)
 	require.Equal(t, float64(50), *result.SevenDay.EstimatedTotalCost)
-	require.Equal(t, now.Add(-5*24*time.Hour), stats.start)
+	require.True(t, stats.start.IsZero(), "the projection must not recompute account cost")
 	require.Equal(t, 1, *result.ResetCredits)
 	require.Equal(t, "123.4500", *result.Credits.Balance)
 	require.Equal(t, *now, *result.UpdatedAt)
@@ -244,12 +246,14 @@ func TestSharedSubscriptionUsageMissingAndInvalidMetrics(t *testing.T) {
 				quota.payload = &OpenAIQuotaUsage{FetchedAt: now.Unix()}
 			case "zero":
 				quota.payload.RateLimit.SecondaryWindow.UsedPercent = 0
+				quota.payload.SubscriptionCost = nil
 			case "invalid utilization":
 				quota.payload.RateLimit.SecondaryWindow.UsedPercent = math.NaN()
 			case "expired window":
 				quota.payload.RateLimit.SecondaryWindow.ResetAt = now.Unix()
 			case "stats failure":
 				stats.err = errors.New("db secret")
+				quota.payload.SubscriptionCost = nil
 			case "primary weekly":
 				quota.payload.RateLimit.PrimaryWindow, quota.payload.RateLimit.SecondaryWindow = quota.payload.RateLimit.SecondaryWindow, nil
 			case "invalid balance":

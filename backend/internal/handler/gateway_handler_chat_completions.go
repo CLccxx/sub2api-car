@@ -288,6 +288,7 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 
 		// 5. Forward request
 		writerSizeBeforeForward := c.Writer.Size()
+		forwardStart := time.Now()
 		forwardBody := body
 		if channelMapping.Mapped {
 			forwardBody = h.gatewayService.ReplaceModelInBody(body, channelMapping.MappedModel)
@@ -356,7 +357,7 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 						zap.Error(err),
 					)
 				}
-			})
+			}, service.NewUsageAccountingScope(account, result, forwardStart))
 		}
 
 		if err != nil {

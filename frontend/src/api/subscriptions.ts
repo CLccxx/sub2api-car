@@ -4,7 +4,7 @@
  */
 
 import { apiClient } from './client'
-import type { UserSubscription, SubscriptionProgress } from '@/types'
+import type { UserSubscription, SubscriptionProgress, UsageEstimateSource } from '@/types'
 
 export interface SharedAccountUsage {
   status: 'ready' | 'no_data' | 'unavailable' | 'not_configured' | 'multiple_accounts' | 'unsupported_account'
@@ -14,6 +14,9 @@ export interface SharedAccountUsage {
     utilization: number
     resets_at: string | null
     estimated_total_cost: number | null
+    credits_used_cost?: number | null
+    estimate_frozen?: boolean
+    estimate_source?: UsageEstimateSource
   } | null
   reset_credits: number | null
   credits: { has_credits: boolean; unlimited: boolean; balance: string | null } | null

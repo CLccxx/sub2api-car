@@ -542,8 +542,14 @@ export default {
         grokLastHeadersSeen: '响应头 {time}',
         passiveSampled: '被动采样',
         activeQuery: '查询',
-        estimatedTotalCost: '预计总费用 ${cost}',
-        estimatedTotalCostTooltip: '根据当前窗口费用和使用率估算达到 100% 使用率时的总费用'
+        estimatedTotalCost: '订阅预计额度',
+        estimatedTotalCostTooltip: '按 7 天窗口费用和使用率动态估算，首次满额后锁定本轮订阅额度。',
+        creditsUsedCost: '点数已用费用',
+        creditsUsedCostHint: '本轮账号费用超出订阅基准的部分，不计入拼车周上限，也不是剩余点数余额。',
+        estimateFrozen: '已锁定',
+        frozenEstimateHint: '本轮订阅额度已锁定，后续点数消费不会增加此金额或拼车周上限。',
+        legacyEstimate: '预设基准',
+        legacyEstimateHint: '本周期没有满额前记录，订阅基准按 $1,600 计算；下次重置后重新记录。'
       },
       openaiReferral: {
         available: '可邀请',

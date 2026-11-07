@@ -98,6 +98,9 @@ type openAICreditsSnapshot struct {
 // Fields not relevant to the quota card are intentionally omitted to keep the
 // surface narrow; full upstream payload preservation is unnecessary.
 type OpenAIQuotaUsage struct {
+	costObservedAt        time.Time
+	costEvidenceAt        time.Time
+	SubscriptionCost      *SubscriptionCostEstimate    `json:"-"`
 	UserID                string                       `json:"user_id,omitempty"`
 	AccountID             string                       `json:"account_id,omitempty"`
 	Email                 string                       `json:"email,omitempty"`
@@ -135,6 +138,7 @@ type OpenAIQuotaResetResult struct {
 // for OpenAI OAuth accounts. It reuses the privacy client factory so all calls
 // flow through the impersonated HTTP client (Cloudflare-friendly TLS fingerprint).
 type OpenAIQuotaService struct {
+	subscriptionCost     *SubscriptionCostService
 	accountRepo          AccountRepository
 	proxyRepo            ProxyRepository
 	tokenProvider        *OpenAITokenProvider
@@ -230,7 +234,8 @@ func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*
 		break
 	}
 
-	payload.FetchedAt = time.Now().Unix()
+	payload.costObservedAt = time.Now()
+	payload.FetchedAt = payload.costObservedAt.Unix()
 	details := s.queryResetCreditDetails(callCtx, client, accessToken, chatGPTAccountID, fedRAMP, accountID)
 	if details != nil {
 		payload.autoResetCandidates = details.AutoResetCandidates
@@ -249,6 +254,7 @@ func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*
 		}
 		payload.RateLimitResetCredits.availableCountMissing = false
 	}
+	payload.SubscriptionCost = s.subscriptionCost.ObserveUsage(ctx, accountID, chatGPTAccountID, &payload)
 	return &payload, nil
 }
 

@@ -175,7 +175,9 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	openAIReferralClient := repository.NewOpenAIReferralClient(privacyClientFactory)
 	carpoolResetMonitorRepository := repository.NewCarpoolResetMonitorRepository(db)
 	quotaResetCoordinator := repository.NewQuotaResetCoordinator(db)
-	openAIQuotaService := service.ProvideOpenAIQuotaService(accountRepository, proxyRepository, openAITokenProvider, privacyClientFactory, openAIReferralClient, openAIGatewayService, carpoolResetMonitorRepository, quotaResetCoordinator)
+	subscriptionCostRepository := repository.NewSubscriptionCostRepository(db)
+	subscriptionCostService := service.NewSubscriptionCostService(subscriptionCostRepository, accountRepository)
+	openAIQuotaService := service.ProvideOpenAIQuotaService(accountRepository, proxyRepository, openAITokenProvider, privacyClientFactory, openAIReferralClient, openAIGatewayService, carpoolResetMonitorRepository, quotaResetCoordinator, subscriptionCostService, gatewayService)
 	sharedSubscriptionUsageService := service.ProvideSharedSubscriptionUsageService(userSubscriptionRepository, accountRepository, usageLogRepository, openAIQuotaService)
 	carpoolResetVoteRepository := repository.NewCarpoolResetVoteRepository(db)
 	carpoolResetMonitorService := service.ProvideCarpoolResetMonitorService(carpoolResetMonitorRepository, openAIQuotaService, subscriptionService)
@@ -364,7 +366,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	channelMonitorRunner := service.ProvideChannelMonitorRunner(channelMonitorService, settingService, channelMonitorQuotaFetcher)
 	channelMonitorV2Aggregator := service.ProvideChannelMonitorV2Aggregator(channelMonitorV2Repository, db, settingService)
 	userPlatformQuotaUsageFlusher := service.ProvideUserPlatformQuotaUsageFlusher(configConfig, billingCache, serviceUserPlatformQuotaRepository, timingWheelService)
-	v := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, cnProviderBalanceCheckService, openAICodexVersionSyncService, claudeCodeVersionSyncService, proxyExpiryService, subscriptionExpiryService, usageCleanupService, idempotencyCleanupService, geminiCachedContentService, batchImageCleanupService, batchImageWorkerRuntime, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, carpoolQuotaService, carpoolResetMonitorService, carpoolResetVoteService, backupService, paymentOrderExpiryService, channelMonitorRunner, channelMonitorV2Aggregator, userPlatformQuotaUsageFlusher, upstreamBillingProbeService, ollamaCloudUsageService, openCodeGoUsageService, auditLogService, openAIQuotaAutoResetService, promptService, pluginManager)
+	v := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, cnProviderBalanceCheckService, openAICodexVersionSyncService, claudeCodeVersionSyncService, proxyExpiryService, subscriptionExpiryService, usageCleanupService, idempotencyCleanupService, geminiCachedContentService, batchImageCleanupService, batchImageWorkerRuntime, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, carpoolQuotaService, subscriptionCostService, carpoolResetMonitorService, carpoolResetVoteService, backupService, paymentOrderExpiryService, channelMonitorRunner, channelMonitorV2Aggregator, userPlatformQuotaUsageFlusher, upstreamBillingProbeService, ollamaCloudUsageService, openCodeGoUsageService, auditLogService, openAIQuotaAutoResetService, promptService, pluginManager)
 	application := &Application{
 		Server:        httpServer,
 		PromptAudit:   promptService,
@@ -440,6 +442,7 @@ func provideCleanup(
 	openAIGateway *service.OpenAIGatewayService,
 	scheduledTestRunner *service.ScheduledTestRunnerService,
 	carpoolQuota *service.CarpoolQuotaService,
+	subscriptionCost *service.SubscriptionCostService,
 	carpoolResetMonitor *service.CarpoolResetMonitorService,
 	carpoolResetVote *service.CarpoolResetVoteService,
 	backupSvc *service.BackupService,
@@ -465,6 +468,12 @@ func provideCleanup(
 		}
 
 		parallelSteps := []cleanupStep{
+			{"SubscriptionCostService", func() error {
+				if subscriptionCost != nil {
+					subscriptionCost.Stop()
+				}
+				return nil
+			}},
 			{"CarpoolQuotaService", func() error {
 				if carpoolQuota != nil {
 					carpoolQuota.Stop()

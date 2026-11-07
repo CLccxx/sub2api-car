@@ -608,7 +608,7 @@ describe('AccountUsageCell', () => {
     expect(wrapper.text()).toContain('7d|36|900')
   })
 
-  it('仅为 OpenAI OAuth 7d 窗口计算预计总费用', async () => {
+  it('使用后端冻结的订阅估算和点数费用，不从合计费用重新计算', async () => {
     getUsage.mockResolvedValue({
       five_hour: {
         utilization: 25,
@@ -617,10 +617,14 @@ describe('AccountUsageCell', () => {
         window_stats: { requests: 1, tokens: 100, cost: 2 }
       },
       seven_day: {
-        utilization: 40,
+        utilization: 100,
         resets_at: null,
         remaining_seconds: 0,
-        window_stats: { requests: 2, tokens: 200, cost: 12 }
+        window_stats: { requests: 2, tokens: 200, cost: 2200 },
+        estimated_total_cost: 2000,
+        credits_used_cost: 200,
+        estimate_frozen: true,
+        estimate_source: 'observed'
       }
     })
 
@@ -631,8 +635,8 @@ describe('AccountUsageCell', () => {
       global: {
         stubs: {
           UsageProgressBar: {
-            props: ['label', 'estimatedTotalCost'],
-            template: '<div class="usage-bar">{{ label }}|{{ estimatedTotalCost ?? "none" }}</div>'
+            props: ['label', 'estimatedTotalCost', 'creditsUsedCost', 'estimateFrozen', 'estimateSource'],
+            template: '<div class="usage-bar">{{ label }}|{{ estimatedTotalCost ?? "none" }}|{{ creditsUsedCost ?? "none" }}|{{ estimateFrozen }}|{{ estimateSource }}</div>'
           },
           AccountQuotaInfo: true
         }
@@ -642,7 +646,8 @@ describe('AccountUsageCell', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('5h|none')
-    expect(wrapper.text()).toContain('7d|30')
+    expect(wrapper.text()).toContain('7d|2000|200|true|observed')
+    expect(wrapper.text()).not.toContain('7d|2200')
   })
 
   it.each([
@@ -650,7 +655,8 @@ describe('AccountUsageCell', () => {
     { id: 6802, utilization: -1, cost: 12 },
     { id: 6803, utilization: Number.NaN, cost: 12 },
     { id: 6804, utilization: 40, cost: 0 },
-    { id: 6805, utilization: 40, cost: Number.POSITIVE_INFINITY }
+    { id: 6805, utilization: 40, cost: Number.POSITIVE_INFINITY },
+    { id: 6806, utilization: 100, cost: 2200 }
   ])('OpenAI OAuth 7d 输入无效时不显示预计总费用 (%o)', async ({ id, utilization, cost }) => {
     getUsage.mockResolvedValue({
       seven_day: {

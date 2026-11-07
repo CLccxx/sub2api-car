@@ -430,7 +430,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 					zap.Int64("account_id", account.ID),
 				).Error("openai.images.record_usage_failed", zap.Error(err))
 			}
-		})
+		}, service.NewUsageAccountingScope(account, result, forwardStart))
 
 		reqLog.Debug("openai.images.request_completed",
 			zap.Int64("account_id", account.ID),

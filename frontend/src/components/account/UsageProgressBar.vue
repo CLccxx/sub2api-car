@@ -5,7 +5,7 @@
       v-if="windowStats && (windowStats.requests > 0 || windowStats.tokens > 0)"
       class="mb-0.5 flex items-center"
     >
-      <div class="flex items-center gap-1.5 text-[9px] text-gray-500 dark:text-gray-400">
+      <div class="flex flex-wrap items-center gap-1.5 text-[9px] text-gray-500 dark:text-gray-400">
         <span class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800">
           {{ formatRequests }} req
         </span>
@@ -22,16 +22,23 @@
         >
           U ${{ formatUserCost }}
         </span>
-        <span
-          v-if="estimatedTotalCost != null"
-          data-test="estimated-total-cost"
-          class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800"
-          :title="t('admin.accounts.usageWindow.estimatedTotalCostTooltip')"
-        >
-          {{ t('admin.accounts.usageWindow.estimatedTotalCost', { cost: estimatedTotalCost.toFixed(2) }) }}
-        </span>
       </div>
     </div>
+
+    <dl v-if="showCostBreakdown" class="mb-1 space-y-0.5 text-[10px] text-gray-600 dark:text-gray-300">
+      <div data-test="estimated-total-cost" class="flex flex-wrap items-baseline gap-x-1" :title="estimateHint">
+        <dt>{{ t('admin.accounts.usageWindow.estimatedTotalCost') }}</dt>
+        <dd class="flex flex-wrap items-baseline gap-x-1">
+          <span class="font-medium tabular-nums text-gray-900 dark:text-gray-100">{{ subscriptionCostText }}</span>
+          <span v-if="showFrozenEstimate" data-test="estimate-frozen">{{ t('admin.accounts.usageWindow.estimateFrozen') }}</span>
+          <span v-if="showLegacyEstimate" data-test="legacy-estimate" :title="t('admin.accounts.usageWindow.legacyEstimateHint')">{{ t('admin.accounts.usageWindow.legacyEstimate') }}</span>
+        </dd>
+      </div>
+      <div data-test="credits-used-cost" class="flex flex-wrap items-baseline gap-x-1" :title="t('admin.accounts.usageWindow.creditsUsedCostHint')">
+        <dt>{{ t('admin.accounts.usageWindow.creditsUsedCost') }}</dt>
+        <dd class="font-medium tabular-nums text-gray-900 dark:text-gray-100">{{ creditCostText }}</dd>
+      </div>
+    </dl>
 
     <!-- Progress bar row -->
     <div class="flex items-center gap-1">
@@ -65,7 +72,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useIntervalFn } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
-import type { WindowStats } from '@/types'
+import type { UsageEstimateSource, WindowStats } from '@/types'
 import { formatCompactNumber } from '@/utils/format'
 
 const props = withDefaults(
@@ -76,6 +83,10 @@ const props = withDefaults(
     color: 'indigo' | 'emerald' | 'purple' | 'amber'
     windowStats?: WindowStats | null
     estimatedTotalCost?: number | null
+    creditsUsedCost?: number | null
+    estimateFrozen?: boolean
+    estimateSource?: UsageEstimateSource
+    showCostBreakdown?: boolean
     showNowWhenIdle?: boolean
     remainingCapacity?: boolean
     /** fixed: 定宽居中徽章（账号页纵向对齐）；auto: 限宽截断左对齐（监控页组合标签） */
@@ -89,6 +100,14 @@ const { t } = useI18n()
 // Reactive clock for countdown — only runs when a reset time is shown,
 // to avoid creating many idle timers across large account lists.
 const now = ref(new Date())
+const costWindowCurrent = computed(() => !props.resetsAt || Date.parse(props.resetsAt) > now.value.getTime())
+const validCost = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0
+const subscriptionCostText = computed(() => costWindowCurrent.value && validCost(props.estimatedTotalCost) ? `$${props.estimatedTotalCost.toFixed(2)}` : t('common.unknown'))
+const creditCostText = computed(() => costWindowCurrent.value && validCost(props.creditsUsedCost) ? `$${props.creditsUsedCost.toFixed(2)}` : t('common.unknown'))
+const showFrozenEstimate = computed(() => costWindowCurrent.value && validCost(props.estimatedTotalCost) && props.estimateFrozen === true)
+const showLegacyEstimate = computed(() => showFrozenEstimate.value && props.estimateSource === 'legacy_default')
+const estimateHint = computed(() => t(showLegacyEstimate.value ? 'admin.accounts.usageWindow.legacyEstimateHint'
+  : showFrozenEstimate.value ? 'admin.accounts.usageWindow.frozenEstimateHint' : 'admin.accounts.usageWindow.estimatedTotalCostTooltip'))
 const { pause: pauseClock, resume: resumeClock } = useIntervalFn(
   () => {
     now.value = new Date()

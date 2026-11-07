@@ -2,7 +2,9 @@ package handler
 
 import (
 	"context"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/stretchr/testify/require"
@@ -38,4 +40,14 @@ func TestOpenAISubmitUsageRecordTaskCopiesRequestContext(t *testing.T) {
 
 	require.Equal(t, "openai-client-request-123", gotClientRequestID)
 	require.Equal(t, "openai-request-456", gotRequestID)
+}
+
+func TestDeferredUsageTaskCapturesObservationBeforeExecution(t *testing.T) {
+	started := time.Now()
+	var captured time.Time
+	task, _ := wrapUsageRecordTaskContext(context.Background(), func(ctx context.Context) { captured = service.UsageObservationTime(ctx) })
+	wrapped := time.Now()
+	task(context.Background())
+	require.False(t, captured.Before(started))
+	require.False(t, captured.After(wrapped), "worker execution must retain enqueue-time observation")
 }
