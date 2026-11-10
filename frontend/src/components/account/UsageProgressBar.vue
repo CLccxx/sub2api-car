@@ -25,18 +25,18 @@
       </div>
     </div>
 
-    <dl v-if="showCostBreakdown" class="mb-1 space-y-0.5 text-[10px] text-gray-600 dark:text-gray-300">
-      <div data-test="estimated-total-cost" class="flex flex-wrap items-baseline gap-x-1" :title="estimateHint">
-        <dt>{{ t('admin.accounts.usageWindow.estimatedTotalCost') }}</dt>
-        <dd class="flex flex-wrap items-baseline gap-x-1">
-          <span class="font-medium tabular-nums text-gray-900 dark:text-gray-100">{{ subscriptionCostText }}</span>
-          <span v-if="showFrozenEstimate" data-test="estimate-frozen">{{ t('admin.accounts.usageWindow.estimateFrozen') }}</span>
-          <span v-if="showLegacyEstimate" data-test="legacy-estimate" :title="t('admin.accounts.usageWindow.legacyEstimateHint')">{{ t('admin.accounts.usageWindow.legacyEstimate') }}</span>
+    <dl v-if="showCostBreakdown" class="mb-1 flex flex-wrap items-center gap-1.5 text-[9px] text-gray-500 dark:text-gray-400">
+      <div data-test="estimated-total-cost" class="inline-flex flex-wrap items-center gap-x-1 rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800" :title="`${t('admin.accounts.usageWindow.estimatedTotalCost')} · ${estimateHint}`">
+        <dt :aria-label="t('admin.accounts.usageWindow.estimatedTotalCost')">{{ t('admin.accounts.usageWindow.subscriptionCostShort') }}</dt>
+        <dd class="inline-flex flex-wrap items-center gap-x-1 tabular-nums">
+          <span>{{ subscriptionCostText }}</span>
+          <span v-if="showFrozenEstimate" data-test="estimate-frozen" class="text-gray-600 dark:text-gray-300">{{ t('admin.accounts.usageWindow.estimateFrozen') }}</span>
+          <span v-if="showLegacyEstimate" data-test="legacy-estimate" class="text-amber-700 dark:text-amber-300" :title="t('admin.accounts.usageWindow.legacyEstimateHint')">{{ t('admin.accounts.usageWindow.legacyEstimate') }}</span>
         </dd>
       </div>
-      <div data-test="credits-used-cost" class="flex flex-wrap items-baseline gap-x-1" :title="t('admin.accounts.usageWindow.creditsUsedCostHint')">
-        <dt>{{ t('admin.accounts.usageWindow.creditsUsedCost') }}</dt>
-        <dd class="font-medium tabular-nums text-gray-900 dark:text-gray-100">{{ creditCostText }}</dd>
+      <div data-test="credits-used-cost" class="inline-flex items-center gap-x-1 rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800" :title="`${t('admin.accounts.usageWindow.creditsUsedCost')} · ${t('admin.accounts.usageWindow.creditsUsedCostHint')}`">
+        <dt :aria-label="t('admin.accounts.usageWindow.creditsUsedCost')">{{ t('admin.accounts.usageWindow.creditsCostShort') }}</dt>
+        <dd class="tabular-nums">{{ creditCostText }}</dd>
       </div>
     </dl>
 
