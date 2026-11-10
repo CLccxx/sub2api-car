@@ -141,6 +141,19 @@ sudo systemctl status sub2api-car-updater --no-pager
 
 ### 发布后续版本
 
+`0.2.20-car` 同步了官方管理 MCP、请求体内存预算和读写超时控制。管理 MCP
+默认关闭，需要显式设置 `MCP_PUBLIC_URL` 才启用。请求体预算的配置键是
+`gateway.request_body_memory_budget_bytes`（环境变量
+`GATEWAY_REQUEST_BODY_MEMORY_BUDGET_BYTES`），官方默认值为 1 GiB；小内存部署
+应结合应用容器上限及其他内存占用配置，参见 [EDGE_SECURITY.md](EDGE_SECURITY.md)。
+网页更新会保留管理员已有的 Compose 配置；如需启用新增配置项，应将对应环境
+变量加入现有应用服务的 `environment`，仅修改 Compose 的 `.env` 不会自动传入
+未被配置引用的环境变量。
+
+本次新增官方 `249_mcp_oauth.sql`，保留定制 `249_custom_carpool_account_scope.sql`
+和 `250_custom_subscription_cost.sql`。迁移记录按完整文件名识别，已应用的定制
+迁移无需重命名或重新执行；新增官方迁移在升级启动时执行。
+
 完成业务测试并提交代码后，先将已验证提交推送到本仓库默认分支 `main`，
 再为同一提交创建新的定制版本标签，例如：
 

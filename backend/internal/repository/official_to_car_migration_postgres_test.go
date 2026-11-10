@@ -75,8 +75,8 @@ func officialToCarTestDB(t *testing.T) *sql.DB {
 }
 
 func TestOfficial018ToCar019PostgresPreservesData(t *testing.T) {
-	// The merged tree retains official 0.2.18 SQL byte-for-byte. Only these
-	// car migrations and two official 0.2.19 migrations were absent there.
+	// The merged tree retains official 0.2.18 SQL byte-for-byte. These car
+	// migrations and the official 0.2.19/0.2.20 additions were absent there.
 	assertCarMigrationPreservesData(t, map[string]bool{
 		"237_custom_group_carpool.sql":          true,
 		"238_custom_carpool_reset_monitor.sql":  true,
@@ -86,6 +86,7 @@ func TestOfficial018ToCar019PostgresPreservesData(t *testing.T) {
 		"248_group_image_count_billing.sql":     true,
 		"249_custom_carpool_account_scope.sql":  true,
 		"250_custom_subscription_cost.sql":      true,
+		"249_mcp_oauth.sql":                     true,
 	})
 }
 
@@ -93,11 +94,27 @@ func TestCar019ToAccountScopedCarPostgresPreservesData(t *testing.T) {
 	assertCarMigrationPreservesData(t, map[string]bool{
 		"249_custom_carpool_account_scope.sql": true,
 		"250_custom_subscription_cost.sql":     true,
+		"249_mcp_oauth.sql":                    true,
 	})
 }
 
 func TestCarAccountScopedToSubscriptionCostPostgresPreservesData(t *testing.T) {
-	assertCarMigrationPreservesData(t, map[string]bool{"250_custom_subscription_cost.sql": true})
+	assertCarMigrationPreservesData(t, map[string]bool{"250_custom_subscription_cost.sql": true, "249_mcp_oauth.sql": true})
+}
+
+func TestCar019Car3ToCar020PostgresPreservesData(t *testing.T) {
+	assertCarMigrationPreservesData(t, map[string]bool{"249_mcp_oauth.sql": true})
+}
+
+func TestOfficial020ToCar020PostgresPreservesData(t *testing.T) {
+	assertCarMigrationPreservesData(t, map[string]bool{
+		"237_custom_group_carpool.sql":          true,
+		"238_custom_carpool_reset_monitor.sql":  true,
+		"241_custom_quota_reset_operations.sql": true,
+		"242_custom_carpool_reset_voting.sql":   true,
+		"249_custom_carpool_account_scope.sql":  true,
+		"250_custom_subscription_cost.sql":      true,
+	})
 }
 
 func assertCarMigrationPreservesData(t *testing.T, pending map[string]bool) {
@@ -152,6 +169,65 @@ func assertCarMigrationPreservesData(t *testing.T, pending map[string]bool) {
 	`)
 	require.NoError(t, err)
 
+	expectedMembers := 0
+	expectedSynced := sql.NullTime{}
+	if !pending["237_custom_group_carpool.sql"] {
+		expectedMembers = 4
+		expectedSynced = sql.NullTime{Time: time.Date(2026, time.October, 30, 12, 34, 56, 123456000, time.UTC), Valid: true}
+		_, err = db.ExecContext(ctx, `UPDATE groups SET carpool_members=$1,carpool_quota_synced_at=$2 WHERE id=9002`, expectedMembers, expectedSynced.Time)
+		require.NoError(t, err)
+	}
+	expectedImageCountBilling := !pending["248_group_image_count_billing.sql"]
+	if expectedImageCountBilling {
+		_, err = db.ExecContext(ctx, `UPDATE groups SET image_count_billing=true WHERE id=9002`)
+		require.NoError(t, err)
+	}
+
+	// Seed features already present in the source release; their complete rows,
+	// including attribution and timestamps, must survive both startup passes.
+	preservedFeatureTables := []string{}
+	if !pending["249_custom_carpool_account_scope.sql"] {
+		_, err = db.ExecContext(ctx, `
+			INSERT INTO carpool_reset_account_monitors(account_id,group_id,identity_hash,source_revision,scope_version,baseline,updated_at)
+			VALUES (9004,9002,'fixture-monitor-identity',7,1,
+			 '{"ObservedAt":"2026-10-30T12:00:00Z","ResetAt":"2026-11-02T00:00:00Z","Utilization":87.5}',
+			 '2026-10-30T12:00:00.123456Z');
+			INSERT INTO carpool_reset_account_changes(id,account_id) VALUES (9020,9004);
+			INSERT INTO carpool_reset_group_changes(id,group_id) VALUES (9021,9002);
+		`)
+		require.NoError(t, err)
+		preservedFeatureTables = append(preservedFeatureTables, "carpool_reset_account_monitors", "carpool_reset_account_changes", "carpool_reset_group_changes")
+	}
+	if !pending["250_custom_subscription_cost.sql"] {
+		_, err = db.ExecContext(ctx, `
+			INSERT INTO subscription_cost_account_epochs(account_id,revision,identity_started_at)
+			VALUES (9004,7,'2026-10-01T00:00:00Z');
+			INSERT INTO subscription_cost_states(account_id,identity_hash,identity_revision,state,updated_at)
+			VALUES (9004,'fixture-identity-hash',7,'{"frozen_base":2000,"cycle_start":"2026-10-26T00:00:00Z","seen_below":true}','2026-10-30T12:00:00Z');
+			INSERT INTO subscription_cost_pending_usage(id,account_id,identity_hash,started_at,observed_at,utilization,reset_at,usage_log_id,created_at)
+			VALUES (9010,9004,'fixture-identity-hash','2026-10-30T11:59:58Z','2026-10-30T12:00:00Z',90,'2026-11-02T00:00:00Z',9007,'2026-10-30T12:00:01Z'),
+			       (9011,9004,'fixture-identity-hash','2026-10-30T12:00:02Z','2026-10-30T12:00:04Z',91,'2026-11-02T00:00:00Z',NULL,'2026-10-30T12:00:05Z');
+			UPDATE usage_logs SET account_cost_started_at='2026-10-30T11:59:58Z', account_cost_observed_at='2026-10-30T12:00:00Z',
+			 account_cost_identity_hash='fixture-identity-hash', account_cost_pending_id=9010 WHERE id=9007;
+		`)
+		require.NoError(t, err)
+		preservedFeatureTables = append(preservedFeatureTables, "subscription_cost_account_epochs", "subscription_cost_states", "subscription_cost_pending_usage", "subscription_cost_migration_boundary")
+	}
+	if !pending["249_mcp_oauth.sql"] {
+		_, err = db.ExecContext(ctx, `
+			INSERT INTO mcp_oauth_grants(id,client_id,client_name,user_id,token_version,resource,scope,read_only,created_at,expires_at,last_used_at)
+			VALUES ('fixture-grant','fixture-signed-client','Existing MCP client',9001,7,'https://example.invalid/mcp','admin',true,'2026-10-01T00:00:00Z','2099-01-01T00:00:00Z','2026-10-30T00:00:00Z');
+			INSERT INTO mcp_oauth_codes(code_hash,grant_id,client_id,redirect_uri,resource,code_challenge,expires_at,consumed_at)
+			VALUES (repeat('a',64),'fixture-grant','fixture-signed-client','https://example.invalid/callback','https://example.invalid/mcp',repeat('b',43),'2099-01-01T00:00:00Z','2026-10-30T00:00:00Z');
+			INSERT INTO mcp_oauth_credentials(key_hash,grant_id,kind,expires_at,used_at)
+			VALUES (repeat('c',64),'fixture-grant','access','2099-01-01T00:00:00Z',NULL),
+			       (repeat('d',64),'fixture-grant','refresh','2099-01-01T00:00:00Z',NULL),
+			       (repeat('e',64),'fixture-grant','refresh','2099-01-01T00:00:00Z','2026-10-30T00:00:00Z');
+		`)
+		require.NoError(t, err)
+		preservedFeatureTables = append(preservedFeatureTables, "mcp_oauth_grants", "mcp_oauth_codes", "mcp_oauth_credentials")
+	}
+
 	// Auth and refresh-token code is unchanged from official 0.2.18. Issue a
 	// session against that schema, keeping its signing key in PostgreSQL and
 	// its refresh-token family in the same non-default Redis DB across restart.
@@ -176,13 +252,18 @@ func assertCarMigrationPreservesData(t *testing.T, pending map[string]bool) {
 	snapshot := func() map[string]string {
 		t.Helper()
 		out := map[string]string{}
-		for _, table := range []string{"users", "groups", "proxies", "accounts", "account_groups", "user_allowed_groups", "api_keys", "user_subscriptions", "usage_logs", "auth_identities", "settings", "security_secrets"} {
+		for _, table := range append([]string{"users", "groups", "proxies", "accounts", "account_groups", "user_allowed_groups", "api_keys", "user_subscriptions", "usage_logs", "auth_identities", "settings", "security_secrets"}, preservedFeatureTables...) {
 			expression := "to_jsonb(t)"
-			if table == "usage_logs" {
+			if table == "usage_logs" && pending["250_custom_subscription_cost.sql"] {
 				expression += " - 'account_cost_started_at' - 'account_cost_observed_at' - 'account_cost_identity_hash' - 'account_cost_pending_id'"
 			}
 			if table == "groups" {
-				expression += " - 'carpool_members' - 'carpool_quota_synced_at' - 'image_count_billing'"
+				if pending["237_custom_group_carpool.sql"] {
+					expression += " - 'carpool_members' - 'carpool_quota_synced_at'"
+				}
+				if pending["248_group_image_count_billing.sql"] {
+					expression += " - 'image_count_billing'"
+				}
 			}
 			query := `SELECT COALESCE(jsonb_agg(row_data ORDER BY row_data::text), '[]'::jsonb)::text FROM (SELECT ` + expression + ` AS row_data FROM ` + pq.QuoteIdentifier(table) + ` t) rows`
 			var value string
@@ -279,14 +360,17 @@ func assertCarMigrationPreservesData(t *testing.T, pending map[string]bool) {
 
 	var historicalAttributionIsNull bool
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT account_cost_started_at IS NULL AND account_cost_observed_at IS NULL AND account_cost_identity_hash IS NULL AND account_cost_pending_id IS NULL FROM usage_logs WHERE id=9007`).Scan(&historicalAttributionIsNull))
-	require.True(t, historicalAttributionIsNull, "upgrade must not invent historical attribution")
+	require.Equal(t, pending["250_custom_subscription_cost.sql"], historicalAttributionIsNull, "upgrade must preserve existing attribution and never invent historical attribution")
 	var members int
 	var synced sql.NullTime
 	var imageCountBilling bool
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT carpool_members,carpool_quota_synced_at,image_count_billing FROM groups WHERE id=9002`).Scan(&members, &synced, &imageCountBilling))
-	require.Zero(t, members, "existing official groups do not opt into carpool automation")
-	require.False(t, synced.Valid)
-	require.False(t, imageCountBilling, "existing official billing mode is retained")
+	require.Equal(t, expectedMembers, members, "preserve existing carpool size; new columns default to disabled")
+	require.Equal(t, expectedSynced.Valid, synced.Valid, "preserve existing quota sync timestamp presence")
+	if expectedSynced.Valid {
+		require.True(t, expectedSynced.Time.Equal(synced.Time), "preserve existing quota sync timestamp and precision")
+	}
+	require.Equal(t, expectedImageCountBilling, imageCountBilling, "preserve existing image billing mode; new columns default to disabled")
 	for _, table := range []string{"carpool_reset_monitor", "carpool_account_reset_receipts", "carpool_subscription_reset_events", "carpool_subscription_reset_targets", "carpool_reset_source_changes", "quota_reset_operations", "carpool_reset_votes", "carpool_reset_vote_approvals", "carpool_reset_vote_requests", "carpool_reset_vote_targets", "carpool_vote_membership_changes", "scoped_admin_api_keys"} {
 		var count int
 		require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM `+pq.QuoteIdentifier(table)).Scan(&count), table)

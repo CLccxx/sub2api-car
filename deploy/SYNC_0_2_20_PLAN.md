@@ -21,14 +21,15 @@ reset voting, expired/unavailable states, and other account platforms intact.
   panel's presentation. Run their existing component regressions and frontend
   typecheck/lint/build. Inspect desktop/narrow, both themes and languages, frozen,
   dynamic, legacy and unavailable states in the actual rendered components.
-- [ ] Commit verified UI changes before merging the official release tag.
-- [ ] Fetch and verify official v0.2.20; review its changes and merge the exact
+- [x] Commit verified UI changes before merging the official release tag.
+- [x] Fetch and verify official v0.2.20; review its changes and merge the exact
   tag on this isolated branch. Resolve conflicts preserving both official fixes
   and custom subscription/carpool/updater functionality. Check migration filename
   and ledger compatibility, gateway accounting hooks, frontend APIs and CI tooling.
 - [ ] Run backend unit/integration/PostgreSQL upgrade checks, frontend regression
   suite, static checks and embedded build. Independently review specification
-  compliance and code quality; fix actionable findings.
+  compliance and code quality; fix actionable findings. Local checks are complete;
+  the full Docker-backed integration suite must pass in GitHub CI before merging.
 - [ ] Push PR, wait for CI, merge into remote main, create the next available
   v0.2.20-car.N tag, follow release workflow, then verify formal Latest status,
   complete published assets, checksums, migration catalog and updater discovery.
@@ -41,3 +42,14 @@ UI verification: 166 focused component/locale tests, typecheck, full lint and
 production build passed. Rendered desktop and 390px views were inspected in
 Chinese/English and light/dark themes, including dynamic/frozen/legacy/unknown
 states. Independent specification and quality reviews passed.
+
+Integration verification: 3,263 frontend tests across 394 files, frontend
+typecheck/lint/build, backend unit tests, backend lint (zero issues), and embedded
+backend build passed. Five PostgreSQL upgrade rehearsals preserve full rows,
+historical migration ledger checksums/timestamps, subscription-cost state,
+carpool monitors, non-default group settings and login sessions. All 305 existing
+custom-release SQL files and all 300 official SQL files remain byte-identical;
+the merged catalog contains 306 SQL files. Deployment tooling passed 152 tests
+and release helpers passed 12 tests. Independent integration and quality reviews
+passed. Full integration tests run in GitHub CI because local host-Docker-socket
+access from a test container was not approved.
