@@ -1,5 +1,5 @@
 <template>
-  <div class="min-w-0 space-y-3" data-test="reset-vote-panel">
+  <div class="min-w-0 space-y-3 border-t border-gray-100 pt-3 dark:border-dark-700" data-test="reset-vote-panel">
     <dl class="grid min-w-0 grid-cols-2 gap-x-4 gap-y-3 text-sm">
       <div class="min-w-0">
         <dt class="text-xs text-gray-500 dark:text-gray-400">{{ t('userSubscriptions.sharedUsage.resetCredits') }}</dt>
@@ -7,7 +7,7 @@
           <span data-test="shared-usage-reset-credits" class="break-all font-medium tabular-nums text-gray-900 dark:text-gray-100">{{ creditText }}</span>
           <button
             v-if="canCreate" type="button" data-test="reset-vote-create"
-            class="inline-flex min-h-8 items-center gap-1.5 rounded-md text-xs font-medium text-primary-700 hover:text-primary-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary-500 disabled:opacity-50 dark:text-primary-300"
+            class="inline-flex min-h-8 items-center gap-1.5 rounded-md px-1.5 text-xs font-medium text-primary-700 transition-colors hover:bg-primary-50 hover:text-primary-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-primary-300 dark:hover:bg-primary-900/20"
             :disabled="submitting !== null" @click="showConfirmation"
           >
             <Icon name="refresh" size="sm" class="shrink-0" aria-hidden="true" />
@@ -21,7 +21,7 @@
     <div v-if="proposal && !expired" class="min-w-0 space-y-2 border-t border-gray-100 pt-3 dark:border-dark-700" aria-live="polite">
       <div class="flex flex-wrap items-center justify-between gap-2 text-sm">
         <span class="font-medium text-gray-800 dark:text-gray-200">{{ statusText }}</span>
-        <span data-test="reset-vote-progress" class="inline-flex items-center gap-1.5 tabular-nums text-gray-600 dark:text-gray-300">
+        <span data-test="reset-vote-progress" class="inline-flex items-center gap-1.5 text-xs tabular-nums text-gray-600 dark:text-gray-300">
           <Icon name="users" size="sm" class="shrink-0" aria-hidden="true" />
           {{ proposal.agreed_count }}/{{ proposal.required_count }} {{ t('userSubscriptions.resetVote.agreed') }}
         </span>

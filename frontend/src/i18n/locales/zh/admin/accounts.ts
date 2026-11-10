@@ -543,6 +543,8 @@ export default {
         passiveSampled: '被动采样',
         activeQuery: '查询',
         estimatedTotalCost: '订阅预计额度',
+        subscriptionCostShort: '订阅',
+        creditsCostShort: '点数',
         estimatedTotalCostTooltip: '按 7 天窗口费用和使用率动态估算，首次满额后锁定本轮订阅额度。',
         creditsUsedCost: '点数已用费用',
         creditsUsedCostHint: '本轮账号费用超出订阅基准的部分，不计入拼车周上限，也不是剩余点数余额。',

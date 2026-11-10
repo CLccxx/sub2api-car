@@ -1738,6 +1738,8 @@ export default {
         passiveSampled: 'Passive',
         activeQuery: 'Query',
         estimatedTotalCost: 'Subscription estimate',
+        subscriptionCostShort: 'Subscription',
+        creditsCostShort: 'Credits',
         estimatedTotalCostTooltip: 'Estimated from seven-day cost and utilization until first exhaustion, then fixed for the cycle.',
         creditsUsedCost: 'Credit spend',
         creditsUsedCostHint: 'Account cost above the subscription baseline in this cycle. Excluded from carpool weekly limits; this is not the remaining credits balance.',

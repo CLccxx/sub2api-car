@@ -1,5 +1,5 @@
 <template>
-  <section class="min-w-0 space-y-4 border-t border-gray-100 p-4 dark:border-dark-700" data-test="shared-account-usage" :aria-label="t('userSubscriptions.sharedUsage.title')" :aria-busy="loading">
+  <section class="min-w-0 space-y-3 border-t border-gray-100 p-4 dark:border-dark-700" data-test="shared-account-usage" :aria-label="t('userSubscriptions.sharedUsage.title')" :aria-busy="loading">
     <div class="flex min-w-0 items-center justify-between gap-3">
       <div class="flex min-w-0 items-center gap-2">
         <Icon name="chartBar" size="sm" class="shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
@@ -7,7 +7,7 @@
       </div>
       <button
         type="button" data-test="shared-usage-refresh"
-        class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-40 dark:text-gray-400 dark:hover:bg-dark-700"
+        class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-40 dark:text-gray-400 dark:hover:bg-dark-700 dark:hover:text-gray-200"
         :disabled="loading || expired || cooldownSeconds > 0" :title="refreshTitle" :aria-label="refreshTitle" @click="load"
       >
         <Icon name="refresh" size="sm" :class="{ 'animate-spin': loading }" aria-hidden="true" />
@@ -31,32 +31,34 @@
           <div :class="['h-full transition-all duration-300', barClass]" :style="{ width: `${Math.min(utilization, 100)}%` }" />
         </div>
         <div v-else class="h-2 rounded-full bg-gray-100 dark:bg-dark-600" />
+        <dl class="text-xs">
+          <div class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+            <dt class="text-gray-500 dark:text-gray-400">{{ t('userSubscriptions.sharedUsage.resetIn') }}</dt>
+            <dd data-test="shared-usage-countdown" class="break-words tabular-nums text-gray-700 dark:text-gray-300">{{ countdown }}</dd>
+          </div>
+        </dl>
       </div>
 
-      <dl class="grid min-w-0 grid-cols-2 gap-x-4 gap-y-4 text-sm">
+      <dl class="grid min-w-0 grid-cols-2 gap-x-4 gap-y-3 border-t border-gray-100 pt-3 text-sm dark:border-dark-700">
         <div class="min-w-0">
           <dt class="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
-            {{ t('userSubscriptions.sharedUsage.estimatedTotalCost') }}
+            <span>{{ t('userSubscriptions.sharedUsage.estimatedTotalCost') }}</span>
             <HelpTooltip :content="estimateHint" />
           </dt>
-          <dd class="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-1 font-medium text-gray-900 dark:text-gray-100">
-            <span data-test="shared-usage-estimate" class="break-all tabular-nums">{{ estimateText }}</span>
-            <span v-if="estimateFrozen" data-test="shared-usage-estimate-frozen" class="text-xs font-normal text-gray-600 dark:text-gray-300">{{ t('userSubscriptions.sharedUsage.estimateFrozen') }}</span>
+          <dd class="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            <span data-test="shared-usage-estimate" class="break-all font-semibold tabular-nums text-gray-900 dark:text-gray-100">{{ estimateText }}</span>
+            <span v-if="estimateFrozen" data-test="shared-usage-estimate-frozen" class="rounded bg-gray-100 px-1.5 py-0.5 text-[11px] leading-4 text-gray-600 dark:bg-dark-700 dark:text-gray-300">{{ t('userSubscriptions.sharedUsage.estimateFrozen') }}</span>
           </dd>
         </div>
         <div class="min-w-0">
           <dt class="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
-            {{ t('userSubscriptions.sharedUsage.creditsUsedCost') }}
+            <span>{{ t('userSubscriptions.sharedUsage.creditsUsedCost') }}</span>
             <HelpTooltip :content="t('userSubscriptions.sharedUsage.creditsUsedCostHint')" />
           </dt>
-          <dd data-test="shared-usage-credit-cost" class="mt-1 break-all font-medium tabular-nums text-gray-900 dark:text-gray-100">{{ creditCostText }}</dd>
-        </div>
-        <div class="col-span-2 flex min-w-0 flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-          <dt class="text-xs text-gray-500 dark:text-gray-400">{{ t('userSubscriptions.sharedUsage.resetIn') }}</dt>
-          <dd data-test="shared-usage-countdown" class="break-words text-xs tabular-nums text-gray-700 dark:text-gray-300">{{ countdown }}</dd>
+          <dd data-test="shared-usage-credit-cost" class="mt-1 break-all font-semibold tabular-nums text-gray-900 dark:text-gray-100">{{ creditCostText }}</dd>
         </div>
       </dl>
-      <p v-if="legacyEstimate" data-test="shared-usage-legacy-estimate" class="text-xs text-gray-600 dark:text-gray-300">{{ t('userSubscriptions.sharedUsage.legacyEstimateHint') }}</p>
+      <p v-if="legacyEstimate" data-test="shared-usage-legacy-estimate" class="text-xs leading-relaxed text-gray-500 dark:text-gray-400">{{ t('userSubscriptions.sharedUsage.legacyEstimateHint') }}</p>
     </template>
     <ResetVotePanel
       v-if="!expired"
@@ -66,10 +68,10 @@
     >
       <div v-if="showUsageMetrics" class="min-w-0">
         <dt class="text-xs text-gray-500 dark:text-gray-400">{{ t('userSubscriptions.sharedUsage.points') }}</dt>
-        <dd data-test="shared-usage-points" class="mt-1 break-all font-medium tabular-nums text-gray-900 dark:text-gray-100">{{ pointsText }}</dd>
+        <dd data-test="shared-usage-points" class="mt-1 flex min-h-8 items-center break-all font-medium tabular-nums text-gray-900 dark:text-gray-100">{{ pointsText }}</dd>
       </div>
     </ResetVotePanel>
-    <p v-if="showUsageMetrics && usage?.updated_at" class="break-words text-xs text-gray-400 dark:text-gray-500">
+    <p v-if="showUsageMetrics && usage?.updated_at" class="break-words text-xs text-gray-500 dark:text-gray-400">
       {{ t('userSubscriptions.sharedUsage.updatedAt', { time: formatDateTimeToMinute(usage.updated_at) }) }}
     </p>
   </section>
