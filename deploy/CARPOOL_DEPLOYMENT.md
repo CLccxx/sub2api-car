@@ -154,6 +154,13 @@ sudo systemctl status sub2api-car-updater --no-pager
 和 `250_custom_subscription_cost.sql`。迁移记录按完整文件名识别，已应用的定制
 迁移无需重命名或重新执行；新增官方迁移在升级启动时执行。
 
+`0.2.21-car` 新增 `249_add_usage_logs_api_key_cost_index_notx.sql` 和
+`250_openai_cache_write_ttl.sql`。升级自 `0.2.20-car.1` 时自动应用这两条迁移，
+既有 SQL 和迁移记录保持原样。第一条在 `usage_logs` 上并发创建索引，记录量较大时
+首次启动可能耗时较长。第二条新增 OpenAI 的 30 分钟、12 小时缓存写入计费字段，
+与现有定制版的订阅费用归因一同保留。未显式配置请求体内存预算时，官方按进程内存
+上限的四分之一自动设定，最低 1 GiB；显式配置继续生效。
+
 完成业务测试并提交代码后，先将已验证提交推送到本仓库默认分支 `main`，
 再为同一提交创建新的定制版本标签，例如：
 

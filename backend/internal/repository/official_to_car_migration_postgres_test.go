@@ -77,7 +77,7 @@ func officialToCarTestDB(t *testing.T) *sql.DB {
 func TestOfficial018ToCar019PostgresPreservesData(t *testing.T) {
 	// The merged tree retains official 0.2.18 SQL byte-for-byte. These car
 	// migrations and the official 0.2.19/0.2.20 additions were absent there.
-	assertCarMigrationPreservesData(t, map[string]bool{
+	assertCarMigrationBeforeOfficial021(t, map[string]bool{
 		"237_custom_group_carpool.sql":          true,
 		"238_custom_carpool_reset_monitor.sql":  true,
 		"241_custom_quota_reset_operations.sql": true,
@@ -91,7 +91,7 @@ func TestOfficial018ToCar019PostgresPreservesData(t *testing.T) {
 }
 
 func TestCar019ToAccountScopedCarPostgresPreservesData(t *testing.T) {
-	assertCarMigrationPreservesData(t, map[string]bool{
+	assertCarMigrationBeforeOfficial021(t, map[string]bool{
 		"249_custom_carpool_account_scope.sql": true,
 		"250_custom_subscription_cost.sql":     true,
 		"249_mcp_oauth.sql":                    true,
@@ -99,22 +99,41 @@ func TestCar019ToAccountScopedCarPostgresPreservesData(t *testing.T) {
 }
 
 func TestCarAccountScopedToSubscriptionCostPostgresPreservesData(t *testing.T) {
-	assertCarMigrationPreservesData(t, map[string]bool{"250_custom_subscription_cost.sql": true, "249_mcp_oauth.sql": true})
+	assertCarMigrationBeforeOfficial021(t, map[string]bool{"250_custom_subscription_cost.sql": true, "249_mcp_oauth.sql": true})
 }
 
 func TestCar019Car3ToCar020PostgresPreservesData(t *testing.T) {
-	assertCarMigrationPreservesData(t, map[string]bool{"249_mcp_oauth.sql": true})
+	assertCarMigrationBeforeOfficial021(t, map[string]bool{"249_mcp_oauth.sql": true})
 }
 
 func TestOfficial020ToCar020PostgresPreservesData(t *testing.T) {
-	assertCarMigrationPreservesData(t, map[string]bool{
+	assertCarMigrationBeforeOfficial021(t, carMigrationsAfterOfficial020())
+}
+
+func TestCar020ToCar021PostgresPreservesData(t *testing.T) {
+	assertCarMigrationBeforeOfficial021(t, map[string]bool{})
+}
+
+func TestOfficial021ToCar021PostgresPreservesData(t *testing.T) {
+	assertCarMigrationPreservesData(t, carMigrationsAfterOfficial020())
+}
+
+func carMigrationsAfterOfficial020() map[string]bool {
+	return map[string]bool{
 		"237_custom_group_carpool.sql":          true,
 		"238_custom_carpool_reset_monitor.sql":  true,
 		"241_custom_quota_reset_operations.sql": true,
 		"242_custom_carpool_reset_voting.sql":   true,
 		"249_custom_carpool_account_scope.sql":  true,
 		"250_custom_subscription_cost.sql":      true,
-	})
+	}
+}
+
+func assertCarMigrationBeforeOfficial021(t *testing.T, pending map[string]bool) {
+	t.Helper()
+	pending["249_add_usage_logs_api_key_cost_index_notx.sql"] = true
+	pending["250_openai_cache_write_ttl.sql"] = true
+	assertCarMigrationPreservesData(t, pending)
 }
 
 func assertCarMigrationPreservesData(t *testing.T, pending map[string]bool) {
@@ -168,6 +187,13 @@ func assertCarMigrationPreservesData(t *testing.T, pending map[string]bool) {
 		INSERT INTO security_secrets (key,value) VALUES ('jwt_secret','fixture-persisted-jwt-secret-at-least-32-bytes'),('fixture_totp_secret','fixture-preserved-secret');
 	`)
 	require.NoError(t, err)
+
+	expected30m, expected12h := 0, 0
+	if !pending["250_openai_cache_write_ttl.sql"] {
+		expected30m, expected12h = 12, 34
+		_, err = db.ExecContext(ctx, `UPDATE usage_logs SET cache_creation_30m_tokens=$1, cache_creation_12h_tokens=$2 WHERE id=9007`, expected30m, expected12h)
+		require.NoError(t, err)
+	}
 
 	expectedMembers := 0
 	expectedSynced := sql.NullTime{}
@@ -228,8 +254,7 @@ func assertCarMigrationPreservesData(t *testing.T, pending map[string]bool) {
 		preservedFeatureTables = append(preservedFeatureTables, "mcp_oauth_grants", "mcp_oauth_codes", "mcp_oauth_credentials")
 	}
 
-	// Auth and refresh-token code is unchanged from official 0.2.18. Issue a
-	// session against that schema, keeping its signing key in PostgreSQL and
+	// Issue a session against the previous schema, keeping its signing key in PostgreSQL and
 	// its refresh-token family in the same non-default Redis DB across restart.
 	redisServer := miniredis.RunT(t)
 	redisBefore := redis.NewClient(&redis.Options{Addr: redisServer.Addr(), DB: 3})
@@ -247,8 +272,8 @@ func assertCarMigrationPreservesData(t *testing.T, pending map[string]bool) {
 	require.NoError(t, redisBefore.Close(), "application disconnect must not flush Redis session state")
 
 	// Compare whole rows, including precision, JSON credentials, timestamps,
-	// foreign keys, and settings already seeded by official migrations. Only
-	// the new group columns are excluded from the before/after comparison.
+	// foreign keys, and settings already seeded by official migrations.
+	// Exclude columns that do not exist in the previous schema.
 	snapshot := func() map[string]string {
 		t.Helper()
 		out := map[string]string{}
@@ -256,6 +281,9 @@ func assertCarMigrationPreservesData(t *testing.T, pending map[string]bool) {
 			expression := "to_jsonb(t)"
 			if table == "usage_logs" && pending["250_custom_subscription_cost.sql"] {
 				expression += " - 'account_cost_started_at' - 'account_cost_observed_at' - 'account_cost_identity_hash' - 'account_cost_pending_id'"
+			}
+			if table == "usage_logs" && pending["250_openai_cache_write_ttl.sql"] {
+				expression += " - 'cache_creation_30m_tokens' - 'cache_creation_12h_tokens'"
 			}
 			if table == "groups" {
 				if pending["237_custom_group_carpool.sql"] {
@@ -358,6 +386,14 @@ func assertCarMigrationPreservesData(t *testing.T, pending map[string]bool) {
 	require.ErrorIs(t, err, service.ErrRefreshTokenNotFound, "consumed refresh token must no longer be reusable")
 	require.Equal(t, before, snapshot(), "session validation and refresh must not rewrite preserved database rows")
 
+	var indexValid bool
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT indisvalid FROM pg_index WHERE indexrelid='idx_usage_logs_api_key_created_cost'::regclass`).Scan(&indexValid))
+	require.True(t, indexValid, "the concurrently built covering index must be valid")
+	var actual30m, actual12h int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT cache_creation_30m_tokens, cache_creation_12h_tokens FROM usage_logs WHERE id=9007`).Scan(&actual30m, &actual12h))
+	require.Equal(t, expected30m, actual30m)
+	require.Equal(t, expected12h, actual12h)
+
 	var historicalAttributionIsNull bool
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT account_cost_started_at IS NULL AND account_cost_observed_at IS NULL AND account_cost_identity_hash IS NULL AND account_cost_pending_id IS NULL FROM usage_logs WHERE id=9007`).Scan(&historicalAttributionIsNull))
 	require.Equal(t, pending["250_custom_subscription_cost.sql"], historicalAttributionIsNull, "upgrade must preserve existing attribution and never invent historical attribution")
@@ -381,4 +417,25 @@ func assertCarMigrationPreservesData(t *testing.T, pending map[string]bool) {
 		require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM pg_trigger WHERE tgname=$1 AND NOT tgisinternal`, trigger).Scan(&count))
 		require.Equal(t, 1, count, trigger)
 	}
+
+	// Exercise the merged write against PostgreSQL after verifying historical rows.
+	startedAt := time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
+	identity := "fixture-identity-hash"
+	usage := &service.UsageLog{
+		UserID: 9001, APIKeyID: 9005, AccountID: 9004,
+		RequestID: "fixture-merged-usage", Model: "gpt-5.5",
+		CacheCreation30mTokens: 17, CacheCreation12hTokens: 38,
+		AccountCostStartedAt: &startedAt, AccountCostIdentityHash: &identity,
+	}
+	repo := &usageLogRepository{sql: db}
+	inserted, err := repo.createSingle(ctx, db, usage)
+	require.NoError(t, err)
+	require.True(t, inserted)
+	var actualStartedAt time.Time
+	var actualIdentity string
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT cache_creation_30m_tokens, cache_creation_12h_tokens, account_cost_started_at, account_cost_identity_hash FROM usage_logs WHERE id=$1`, usage.ID).Scan(&actual30m, &actual12h, &actualStartedAt, &actualIdentity))
+	require.Equal(t, 17, actual30m)
+	require.Equal(t, 38, actual12h)
+	require.True(t, startedAt.Equal(actualStartedAt))
+	require.Equal(t, identity, actualIdentity)
 }
