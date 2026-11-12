@@ -235,7 +235,18 @@ func querySharedAccountUsage(ctx context.Context, accountID int64, quota sharedU
 				continue
 			}
 			view := &SharedUsageWindow{Utilization: window.UsedPercent, ResetsAt: resetsAt}
-			if estimate := usage.SubscriptionCost; estimate != nil && resetsAt != nil {
+			estimate := usage.SubscriptionCost
+			if resetsAt != nil && subscriptionCostSlot(ctx).IsZero() {
+				if reader, ok := quota.(interface {
+					readSubscriptionCost(context.Context, int64, time.Time) (*SubscriptionCostSnapshot, error)
+				}); ok {
+					snapshot, err := reader.readSubscriptionCost(ctx, accountID, now)
+					if err == nil {
+						estimate = snapshot.EstimateForWindow(*resetsAt)
+					}
+				}
+			}
+			if estimate != nil && resetsAt != nil {
 				view.EstimatedTotalCost = estimate.EstimatedTotalCost
 				view.CreditsUsedCost = estimate.CreditsUsedCost
 				view.EstimateFrozen = estimate.EstimateFrozen

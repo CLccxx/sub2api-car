@@ -811,17 +811,17 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 		}
 	}
 
-	if !account.IsShadow() && account.IsOpenAIOAuth() && s.openAIQuotaService != nil && s.openAIQuotaService.subscriptionCost != nil {
-		if quota, err := s.openAIQuotaService.QueryUsageReadOnly(WithScopedAdminAccountOperation(ctx, "accounts.usage.read"), account.ID); err == nil && quota != nil {
-			if observation, ok := ReadCarpoolResetObservation(quota, account.GetCredential("chatgpt_account_id"), now); ok {
-				usage.UpdatedAt = &observation.ObservedAt
+	if !account.IsShadow() && account.IsOpenAIOAuth() && s.openAIQuotaService != nil {
+		if snapshot, err := s.openAIQuotaService.readSubscriptionCost(ctx, account.ID, now); err == nil && snapshot != nil {
+			observation := snapshot.Observation
+			if usage.SevenDay == nil || usage.SevenDay.ResetsAt == nil || !usage.SevenDay.ResetsAt.After(now) {
 				usage.SevenDay = &UsageProgress{Utilization: observation.Utilization, ResetsAt: &observation.ResetAt, RemainingSeconds: int(observation.ResetAt.Sub(now).Seconds())}
-				if estimate := quota.SubscriptionCost; estimate != nil {
-					usage.SevenDay.EstimatedTotalCost = estimate.EstimatedTotalCost
-					usage.SevenDay.CreditsUsedCost = estimate.CreditsUsedCost
-					usage.SevenDay.EstimateFrozen = estimate.EstimateFrozen
-					usage.SevenDay.EstimateSource = estimate.EstimateSource
-				}
+			}
+			if estimate := snapshot.EstimateForWindow(*usage.SevenDay.ResetsAt); estimate != nil {
+				usage.SevenDay.EstimatedTotalCost = estimate.EstimatedTotalCost
+				usage.SevenDay.CreditsUsedCost = estimate.CreditsUsedCost
+				usage.SevenDay.EstimateFrozen = estimate.EstimateFrozen
+				usage.SevenDay.EstimateSource = estimate.EstimateSource
 			}
 		}
 	}

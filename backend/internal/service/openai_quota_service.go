@@ -100,7 +100,6 @@ type openAICreditsSnapshot struct {
 // surface narrow; full upstream payload preservation is unnecessary.
 type OpenAIQuotaUsage struct {
 	costObservedAt        time.Time
-	costEvidenceAt        time.Time
 	SubscriptionCost      *SubscriptionCostEstimate    `json:"-"`
 	UserID                string                       `json:"user_id,omitempty"`
 	AccountID             string                       `json:"account_id,omitempty"`
@@ -237,6 +236,18 @@ func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*
 
 	payload.costObservedAt = time.Now()
 	payload.FetchedAt = payload.costObservedAt.Unix()
+	if slot := subscriptionCostSlot(ctx); !slot.IsZero() {
+		snapshot, err := s.subscriptionCost.sample(ctx, accountID, chatGPTAccountID, &payload, slot)
+		if err != nil {
+			slog.Warn("subscription_cost_sample_failed", "account_id", accountID, "error", err)
+		}
+		if snapshot != nil {
+			payload.SubscriptionCost = snapshot.EstimateForWindow(snapshot.Observation.ResetAt)
+		}
+		// The scheduled sample only needs the weekly window and account cost.
+		// Avoid a second upstream call for reset-card details.
+		return &payload, nil
+	}
 	details := s.queryResetCreditDetails(callCtx, client, accessToken, chatGPTAccountID, fedRAMP, accountID)
 	if details != nil {
 		payload.autoResetCandidates = details.AutoResetCandidates
@@ -255,7 +266,6 @@ func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*
 		}
 		payload.RateLimitResetCredits.availableCountMissing = false
 	}
-	payload.SubscriptionCost = s.subscriptionCost.ObserveUsage(ctx, accountID, chatGPTAccountID, &payload)
 	return &payload, nil
 }
 

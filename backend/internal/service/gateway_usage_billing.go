@@ -771,7 +771,6 @@ func logResponseModelBillingApplied(component string, account *Account, requestI
 
 // recordUsageCore 是 RecordUsage 的核心实现。
 func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsageCoreInput) error {
-	ctx = s.subscriptionCost.ensureAccounting(ctx, input.Account, input.Result, input.PricingAt)
 	result := input.Result
 	apiKey := input.APIKey
 	user := input.User
@@ -863,12 +862,9 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 		addCacheStorageToAccountStatsCost(usageLog, cacheStorageCost)
 	}
 
-	stampSubscriptionCostAttribution(ctx, usageLog, account, input.PricingAt, result.UpstreamHeaders)
 	simpleModeKeyRateLimitOnly := simpleModeKeyRateLimitBillingEnabled(s.cfg, apiKey)
 	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple && !simpleModeKeyRateLimitOnly {
-		if !writeSubscriptionCostUsage(ctx, s.usageLogRepo, s.subscriptionCost, account, usageLog, result.UpstreamHeaders) {
-			writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.gateway")
-		}
+		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.gateway")
 		logger.LegacyPrintf("service.gateway", "[SIMPLE MODE] Usage recorded (not billed): user=%d, tokens=%d", usageLog.UserID, usageLog.TotalTokens())
 		s.deferredService.ScheduleLastUsedUpdate(account.ID)
 		return nil
@@ -904,9 +900,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.gateway")
 		return billingErr
 	}
-	if !writeSubscriptionCostUsage(ctx, s.usageLogRepo, s.subscriptionCost, account, usageLog, result.UpstreamHeaders) {
-		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.gateway")
-	}
+	writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.gateway")
 
 	return nil
 }

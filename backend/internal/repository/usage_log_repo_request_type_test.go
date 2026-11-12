@@ -101,10 +101,6 @@ func TestUsageLogRepositoryCreateSyncRequestTypeAndLegacyFields(t *testing.T) {
 			sqlmock.AnyArg(), // account_stats_cost
 			sqlmock.AnyArg(), // upstream_request_id
 			sqlmock.AnyArg(), // session_id
-			log.AccountCostPendingID,
-			log.AccountCostStartedAt,
-			log.AccountCostObservedAt,
-			log.AccountCostIdentityHash,
 			log.NativeCompactionV2,
 			log.CacheCreation30mTokens,
 			log.CacheCreation12hTokens,
@@ -202,10 +198,6 @@ func TestUsageLogRepositoryCreate_PersistsServiceTier(t *testing.T) {
 			sqlmock.AnyArg(), // account_stats_cost
 			sqlmock.AnyArg(), // upstream_request_id
 			sqlmock.AnyArg(), // session_id
-			log.AccountCostPendingID,
-			log.AccountCostStartedAt,
-			log.AccountCostObservedAt,
-			log.AccountCostIdentityHash,
 			log.NativeCompactionV2,
 			log.CacheCreation30mTokens,
 			log.CacheCreation12hTokens,

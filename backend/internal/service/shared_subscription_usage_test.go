@@ -32,6 +32,7 @@ func (r *sharedUsageSubRepo) GetByID(_ context.Context, id int64) (*UserSubscrip
 type sharedUsageAccountRepo struct {
 	AccountRepository
 	accounts []Account
+	groups   map[int64][]Account
 	t        *testing.T
 }
 
@@ -60,9 +61,14 @@ func TestSharedSubscriptionUsageMembersShareOneSnapshot(t *testing.T) {
 }
 
 func (r *sharedUsageAccountRepo) ListWithFilters(_ context.Context, p pagination.PaginationParams, platform, kind, status, search string, groupID int64, privacy string) ([]Account, *pagination.PaginationResult, error) {
-	require.Equal(r.t, int64(10), groupID)
 	require.Equal(r.t, 2, p.PageSize)
 	require.Empty(r.t, platform+kind+status+search+privacy, "do not hide disabled or unsupported extra bindings")
+	if r.groups != nil {
+		accounts, ok := r.groups[groupID]
+		require.True(r.t, ok)
+		return accounts, &pagination.PaginationResult{Total: int64(len(accounts))}, nil
+	}
+	require.Equal(r.t, int64(10), groupID)
 	return r.accounts, &pagination.PaginationResult{Total: int64(len(r.accounts))}, nil
 }
 

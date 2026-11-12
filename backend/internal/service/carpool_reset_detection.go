@@ -17,13 +17,10 @@ type CarpoolResetReceipt struct {
 }
 
 type CarpoolResetObservation struct {
-	// CostEvidenceAt is the request/header evidence time, separate from deferred
-	// accounting completion; reset monitoring itself uses ObservedAt unchanged.
-	CostEvidenceAt time.Time            `json:"-"`
-	ObservedAt     time.Time            `json:"observed_at"`
-	ResetAt        time.Time            `json:"reset_at"`
-	Utilization    float64              `json:"utilization"`
-	Receipt        *CarpoolResetReceipt `json:"-"`
+	ObservedAt  time.Time            `json:"observed_at"`
+	ResetAt     time.Time            `json:"reset_at"`
+	Utilization float64              `json:"utilization"`
+	Receipt     *CarpoolResetReceipt `json:"-"`
 }
 
 type CarpoolResetBaseline struct {
