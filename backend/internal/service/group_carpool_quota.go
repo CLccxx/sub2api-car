@@ -11,7 +11,10 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-const carpoolQuotaSchedule = "CRON_TZ=Asia/Shanghai */30 * * * *"
+const (
+	carpoolQuotaSchedule     = "CRON_TZ=Asia/Shanghai */10 * * * *"
+	carpoolQuotaSyncInterval = 30 * time.Minute
+)
 
 type CarpoolQuotaTarget struct {
 	GroupID  int64
@@ -24,18 +27,25 @@ type CarpoolQuotaRepository interface {
 	Apply(context.Context, CarpoolQuotaTarget, *Account, float64, time.Time) (bool, error)
 }
 
+type carpoolQuotaSample struct {
+	view    SharedSubscriptionUsage
+	account Account
+}
+
 type CarpoolQuotaService struct {
-	repo      CarpoolQuotaRepository
-	accounts  AccountRepository
-	quota     sharedUsageQuotaReader
-	stats     sharedUsageStatsReader
-	cache     APIKeyAuthCacheInvalidator
-	now       func() time.Time
-	cron      *cron.Cron
-	ctx       context.Context
-	cancel    context.CancelFunc
-	startOnce sync.Once
-	stopOnce  sync.Once
+	repo       CarpoolQuotaRepository
+	accounts   AccountRepository
+	quota      sharedUsageQuotaReader
+	stats      sharedUsageStatsReader
+	cost       *SubscriptionCostService
+	costCursor int64 // advanced only by the non-overlapping cron job
+	cache      APIKeyAuthCacheInvalidator
+	now        func() time.Time
+	cron       *cron.Cron
+	ctx        context.Context
+	cancel     context.CancelFunc
+	startOnce  sync.Once
+	stopOnce   sync.Once
 }
 
 func NewCarpoolQuotaService(repo CarpoolQuotaRepository, accounts AccountRepository, quota sharedUsageQuotaReader, stats sharedUsageStatsReader, cache APIKeyAuthCacheInvalidator) *CarpoolQuotaService {
@@ -68,14 +78,29 @@ func (s *CarpoolQuotaService) Stop() {
 }
 
 func (s *CarpoolQuotaService) run(parent context.Context) {
-	ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
-	defer cancel()
 	loc, err := time.LoadLocation("Asia/Shanghai")
 	if err != nil {
 		return
 	}
 	now := s.now().In(loc)
-	slot := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute()/30*30, 0, 0, loc)
+	slot := now.Truncate(SubscriptionCostSampleInterval)
+	ctx, cancel := context.WithTimeout(withSubscriptionCostSlot(parent, slot), slot.Add(SubscriptionCostSampleInterval).Sub(now))
+	defer cancel()
+
+	// Group updates and the remaining account scan share observations for
+	// this slot, including failed samples.
+	sampled := make(map[int64]carpoolQuotaSample)
+	if slot.Equal(slot.Truncate(carpoolQuotaSyncInterval)) {
+		s.syncGroupLimits(ctx, slot, sampled)
+	}
+	remaining, done := context.WithTimeout(ctx, 5*time.Minute)
+	defer done()
+	s.sampleRemainingAccounts(remaining, sampled)
+}
+
+func (s *CarpoolQuotaService) syncGroupLimits(ctx context.Context, slot time.Time, sampled map[int64]carpoolQuotaSample) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
 	targets, err := s.repo.ListPending(ctx, slot)
 	if err != nil {
 		logger.LegacyPrintf("service.carpool_quota", "list pending failed: %v", err)
@@ -89,12 +114,52 @@ func (s *CarpoolQuotaService) run(parent context.Context) {
 			continue
 		}
 		readCtx, done := context.WithTimeout(ctx, 30*time.Second)
-		s.refresh(readCtx, target, slot)
+		s.refresh(readCtx, target, slot, sampled)
 		done()
 	}
 }
 
-func (s *CarpoolQuotaService) refresh(ctx context.Context, target CarpoolQuotaTarget, slot time.Time) {
+// Also maintain the admin estimates for eligible accounts without a carpool group.
+func (s *CarpoolQuotaService) sampleRemainingAccounts(ctx context.Context, sampled map[int64]carpoolQuotaSample) {
+	if s.cost == nil {
+		return
+	}
+	const pageSize = 32
+	initial := s.costCursor
+	cursor, wrapped := initial, false
+	for ctx.Err() == nil {
+		ids, err := s.cost.repo.Candidates(ctx, cursor, pageSize)
+		if err != nil {
+			logger.LegacyPrintf("service.carpool_quota", "list subscription cost accounts failed: %v", err)
+			return
+		}
+		for _, id := range ids {
+			if ctx.Err() != nil {
+				return
+			}
+			if wrapped && id > initial {
+				s.costCursor = 0
+				return
+			}
+			cursor, s.costCursor = id, id
+			if _, ok := sampled[id]; ok {
+				continue
+			}
+			readCtx, done := context.WithTimeout(ctx, 30*time.Second)
+			_, _ = s.quota.QueryUsageReadOnly(readCtx, id)
+			done()
+		}
+		if len(ids) < pageSize {
+			if initial == 0 || wrapped {
+				s.costCursor = 0
+				return
+			}
+			cursor, wrapped = 0, true
+		}
+	}
+}
+
+func (s *CarpoolQuotaService) refresh(ctx context.Context, target CarpoolQuotaTarget, slot time.Time, sampled map[int64]carpoolQuotaSample) {
 	accounts, page, err := s.accounts.ListWithFilters(ctx, pagination.PaginationParams{Page: 1, PageSize: 2}, "", "", "", "", target.GroupID, "")
 	if err != nil || len(accounts) != 1 || (page != nil && page.Total != 1) {
 		return
@@ -105,7 +170,17 @@ func (s *CarpoolQuotaService) refresh(ctx context.Context, target CarpoolQuotaTa
 		return
 	}
 	// This bypasses the visitor cache but never probes a model or resets quota.
-	view := querySharedAccountUsage(ctx, account.ID, s.quota, s.stats, s.now).view
+	sample, exists := sampled[account.ID]
+	if !exists {
+		sample = carpoolQuotaSample{
+			view:    querySharedAccountUsage(ctx, account.ID, s.quota, s.stats, s.now).view,
+			account: Account{ID: account.ID, Credentials: account.Credentials},
+		}
+		sampled[account.ID] = sample
+	}
+	// Apply checks the sampled credentials against the current database
+	// identity; using the next group's account could attach a stale estimate.
+	view := sample.view
 	now := s.now()
 	window := view.SevenDay
 	if view.UpdatedAt == nil || view.UpdatedAt.Before(now.Add(-2*time.Minute)) || view.UpdatedAt.After(now.Add(time.Minute)) ||
@@ -116,7 +191,7 @@ func (s *CarpoolQuotaService) refresh(ctx context.Context, target CarpoolQuotaTa
 	if !ok {
 		return
 	}
-	applied, err := s.repo.Apply(ctx, target, account, limit, slot)
+	applied, err := s.repo.Apply(ctx, target, &sample.account, limit, slot)
 	if err != nil {
 		logger.LegacyPrintf("service.carpool_quota", "group=%d update failed: %v", target.GroupID, err)
 		return
@@ -129,8 +204,9 @@ func (s *CarpoolQuotaService) refresh(ctx context.Context, target CarpoolQuotaTa
 	}
 }
 
-func ProvideCarpoolQuotaService(repo CarpoolQuotaRepository, accounts AccountRepository, quota *OpenAIQuotaService, stats UsageLogRepository, keys *APIKeyService) *CarpoolQuotaService {
+func ProvideCarpoolQuotaService(repo CarpoolQuotaRepository, accounts AccountRepository, quota *OpenAIQuotaService, stats UsageLogRepository, keys *APIKeyService, cost *SubscriptionCostService) *CarpoolQuotaService {
 	svc := NewCarpoolQuotaService(repo, accounts, quota, stats, keys)
+	svc.cost = cost
 	svc.Start()
 	return svc
 }

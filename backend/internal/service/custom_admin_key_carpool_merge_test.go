@@ -66,6 +66,15 @@ func TestScopedAdminResetAuthorizesBeforeCachedCoordinatorResult(t *testing.T) {
 	}
 }
 
+type subscriptionCostReadStub struct {
+	SubscriptionCostRepository
+	read func(context.Context, int64, time.Time) (*SubscriptionCostSnapshot, error)
+}
+
+func (s *subscriptionCostReadStub) Read(ctx context.Context, id int64, now time.Time) (*SubscriptionCostSnapshot, error) {
+	return s.read(ctx, id, now)
+}
+
 func TestScopedAdminUsageOnlyIncludesSubscriptionCostProjection(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	account := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, GroupIDs: []int64{1}, Credentials: map[string]any{"access_token": "fixture-token", "chatgpt_account_id": "identity"}, Extra: map[string]any{
@@ -87,20 +96,21 @@ func TestScopedAdminUsageOnlyIncludesSubscriptionCostProjection(t *testing.T) {
 	defer upstream.Close()
 	base, credits := 2000.0, 200.0
 	observations := 0
-	costRepo := &subscriptionCostRepoSpy{observe: func(ctx context.Context, id int64, identity string, observation CarpoolResetObservation) (*SubscriptionCostEstimate, error) {
+	costRepo := &subscriptionCostReadStub{read: func(ctx context.Context, id int64, _ time.Time) (*SubscriptionCostSnapshot, error) {
 		observations++
-		require.True(t, isOpenAIQuotaReadOnly(ctx))
 		require.Equal(t, "accounts.usage.read", scopedAccountOperation(ctx, ""))
 		require.Equal(t, int64(1), id)
-		require.Equal(t, "identity", identity)
-		return &SubscriptionCostEstimate{EstimatedTotalCost: &base, CreditsUsedCost: &credits, EstimateFrozen: true, EstimateSource: "observed"}, nil
+		return &SubscriptionCostSnapshot{
+			Observation: CarpoolResetObservation{ResetAt: now.Add(time.Hour)},
+			Estimate:    &SubscriptionCostEstimate{EstimatedTotalCost: &base, CreditsUsedCost: &credits, EstimateFrozen: true, EstimateSource: "observed"},
+		}, nil
 	}}
 	quota := NewOpenAIQuotaService(accounts, nil, NewOpenAITokenProvider(accounts, nil, nil), newQuotaRedirectingFactory(upstream), nil)
-	quota.subscriptionCost = NewSubscriptionCostService(costRepo, accounts)
+	quota.subscriptionCost = NewSubscriptionCostService(costRepo)
 	svc := &AccountUsageService{accountRepo: accounts, openAIQuotaService: quota, cache: NewUsageCache()}
 	usage, err := svc.GetUsageForAccount(scopedStatisticsServiceContext("accounts.usage.read"), account, false)
 	require.NoError(t, err)
-	require.Equal(t, 1, usageCalls)
+	require.Zero(t, usageCalls, "the admin projection must not trigger an extra upstream estimate query")
 	require.Equal(t, 1, observations)
 	require.NotNil(t, usage.SevenDay)
 	require.Equal(t, &base, usage.SevenDay.EstimatedTotalCost)

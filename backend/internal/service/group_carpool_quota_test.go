@@ -65,7 +65,7 @@ func TestCarpoolScheduleShanghai(t *testing.T) {
 	require.NoError(t, err)
 	now := time.Date(2026, 10, 8, 23, 59, 0, 0, loc)
 	for hour := 0; hour < 24; hour++ {
-		for _, minute := range []int{0, 30} {
+		for _, minute := range []int{0, 10, 20, 30, 40, 50} {
 			next := schedule.Next(now.UTC()).In(loc)
 			require.Equal(t, time.Date(2026, 10, 9, hour, minute, 0, 0, loc), next)
 			now = next
@@ -81,6 +81,7 @@ type carpoolRepoStub struct {
 	writes      int
 	limit       float64
 	accountID   int64
+	identities  []string
 	listedSlot  time.Time
 	appliedSlot time.Time
 }
@@ -93,34 +94,48 @@ func (r *carpoolRepoStub) Apply(_ context.Context, _ CarpoolQuotaTarget, account
 	r.writes++
 	r.limit = limit
 	r.accountID = account.ID
+	r.identities = append(r.identities, account.GetCredential("chatgpt_account_id"))
 	r.appliedSlot = slot
 	return r.applied, r.err
 }
 
-func TestCarpoolQuotaRunHalfHourSlots(t *testing.T) {
+func TestCarpoolQuotaRunSamplesEveryTenMinutesAndSyncsHalfHourly(t *testing.T) {
 	loc, err := time.LoadLocation("Asia/Shanghai")
 	require.NoError(t, err)
 	for _, test := range []struct {
-		hour       int
 		minute     int
 		slotMinute int
-	}{{0, 0, 0}, {0, 29, 0}, {0, 30, 30}, {0, 59, 30}, {1, 0, 0}, {1, 29, 0}, {1, 30, 30}, {1, 59, 30}, {23, 29, 0}, {23, 30, 30}, {23, 59, 30}} {
-		observed := time.Date(2026, 10, 9, test.hour, test.minute, 0, 0, loc)
+		groupSync  bool
+	}{{0, 0, true}, {9, 0, true}, {10, 10, false}, {29, 20, false}, {30, 30, true}, {39, 30, true}, {40, 40, false}, {59, 50, false}} {
+		observed := time.Date(2026, 10, 9, 23, test.minute, 0, 0, loc)
 		t.Run(observed.Format("15:04"), func(t *testing.T) {
 			_, _, accounts, quota, _, now := sharedUsageFixture(t)
 			*now = observed.UTC()
 			quota.payload.FetchedAt = now.Unix()
 			quota.payload.RateLimit.SecondaryWindow.ResetAt = now.Add(48 * time.Hour).Unix()
 			repo := &carpoolRepoStub{targets: []CarpoolQuotaTarget{{GroupID: 10, Members: 4, Revision: *now}}, applied: true}
-			svc := NewCarpoolQuotaService(repo, accounts, quota, &carpoolStats{cost: 120}, nil)
+			wantSlot := time.Date(2026, 10, 9, 23, test.slotMinute, 0, 0, loc)
+			var sampledIDs []int64
+			reader := carpoolQuotaReaderFunc(func(ctx context.Context, id int64) (*OpenAIQuotaUsage, error) {
+				require.Equal(t, wantSlot, subscriptionCostSlot(ctx))
+				sampledIDs = append(sampledIDs, id)
+				return quota.QueryUsageReadOnly(ctx, id)
+			})
+			svc := NewCarpoolQuotaService(repo, accounts, reader, nil, nil)
+			svc.cost = NewSubscriptionCostService(carpoolCandidateStub{ids: []int64{9, 12}})
 			svc.now = func() time.Time { return *now }
 
 			svc.run(context.Background())
 
-			wantSlot := time.Date(2026, 10, 9, test.hour, test.slotMinute, 0, 0, loc)
-			require.Equal(t, wantSlot, repo.listedSlot)
-			require.Equal(t, 1, repo.writes)
-			require.Equal(t, wantSlot, repo.appliedSlot)
+			require.Equal(t, []int64{9, 12}, sampledIDs, "each account should be sampled once, including the grouped account")
+			if test.groupSync {
+				require.Equal(t, wantSlot, repo.listedSlot)
+				require.Equal(t, 1, repo.writes)
+				require.Equal(t, wantSlot, repo.appliedSlot)
+			} else {
+				require.True(t, repo.listedSlot.IsZero())
+				require.Zero(t, repo.writes)
+			}
 		})
 	}
 }
@@ -261,4 +276,76 @@ func TestCarpoolQuotaRefreshReconnectedAccountUsesBonusWithoutMinimumFloor(t *te
 	sub.WeeklyUsageUSD = 175
 	require.False(t, sub.CheckWeeklyLimit(group, 0))
 	require.Equal(t, 175.0, sub.WeeklyUsageUSD, "a lower cap must not clear existing usage")
+}
+
+func TestCarpoolQuotaSamplesSharedAccountOncePerSlot(t *testing.T) {
+	_, _, accounts, quota, stats, now := sharedUsageFixture(t)
+	first := accounts.accounts[0]
+	first.Credentials = map[string]any{"chatgpt_account_id": "original"}
+	rebound := first
+	rebound.Credentials = map[string]any{"chatgpt_account_id": "rebound"}
+	accounts.groups = map[int64][]Account{10: {first}, 11: {rebound}}
+	repo := &carpoolRepoStub{targets: []CarpoolQuotaTarget{
+		{GroupID: 10, Members: 4}, {GroupID: 11, Members: 5},
+	}}
+	svc := NewCarpoolQuotaService(repo, accounts, quota, stats, nil)
+	svc.now = func() time.Time { return *now }
+	svc.run(context.Background())
+	require.Equal(t, 2, repo.writes)
+	require.Equal(t, int64(1), quota.calls.Load())
+	require.Equal(t, []string{"original", "original"}, repo.identities, "apply must validate the sampled identity, even after a rebind")
+}
+
+func TestSubscriptionCostFirstFullSampleLocksActualCost(t *testing.T) {
+	state := &SubscriptionCostState{}
+	first := UpdateSubscriptionCostEstimate(state, 103, 1530)
+	require.Equal(t, 1530.0, *first.EstimatedTotalCost)
+	require.Zero(t, *first.CreditsUsedCost)
+	later := UpdateSubscriptionCostEstimate(state, 106, 1600)
+	require.Equal(t, 1530.0, *later.EstimatedTotalCost)
+	require.Equal(t, 70.0, *later.CreditsUsedCost)
+}
+
+type carpoolCandidateStub struct {
+	SubscriptionCostRepository
+	ids []int64
+}
+
+func (s carpoolCandidateStub) Candidates(_ context.Context, after int64, _ int) ([]int64, error) {
+	candidates := s.ids
+	if candidates == nil {
+		candidates = []int64{1, 2, 3}
+	}
+	var ids []int64
+	for _, id := range candidates {
+		if id > after {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
+type carpoolQuotaReaderFunc func(context.Context, int64) (*OpenAIQuotaUsage, error)
+
+func (f carpoolQuotaReaderFunc) QueryUsageReadOnly(ctx context.Context, id int64) (*OpenAIQuotaUsage, error) {
+	return f(ctx, id)
+}
+
+func TestCarpoolSampleRemainingResumesAfterDeadlineAndWraps(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var calls []int64
+	svc := &CarpoolQuotaService{cost: NewSubscriptionCostService(carpoolCandidateStub{}),
+		quota: carpoolQuotaReaderFunc(func(_ context.Context, id int64) (*OpenAIQuotaUsage, error) {
+			calls = append(calls, id)
+			if len(calls) == 1 {
+				cancel()
+			}
+			return nil, nil
+		}),
+	}
+	svc.sampleRemainingAccounts(ctx, nil)
+	require.Equal(t, []int64{1}, calls)
+	calls = nil
+	svc.sampleRemainingAccounts(context.Background(), map[int64]carpoolQuotaSample{3: {}})
+	require.Equal(t, []int64{2, 1}, calls)
 }

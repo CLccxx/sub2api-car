@@ -419,23 +419,20 @@ func assertCarMigrationPreservesData(t *testing.T, pending map[string]bool) {
 	}
 
 	// Exercise the merged write against PostgreSQL after verifying historical rows.
-	startedAt := time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
-	identity := "fixture-identity-hash"
 	usage := &service.UsageLog{
 		UserID: 9001, APIKeyID: 9005, AccountID: 9004,
 		RequestID: "fixture-merged-usage", Model: "gpt-5.5",
 		CacheCreation30mTokens: 17, CacheCreation12hTokens: 38,
-		AccountCostStartedAt: &startedAt, AccountCostIdentityHash: &identity,
 	}
 	repo := &usageLogRepository{sql: db}
 	inserted, err := repo.createSingle(ctx, db, usage)
 	require.NoError(t, err)
 	require.True(t, inserted)
-	var actualStartedAt time.Time
-	var actualIdentity string
-	require.NoError(t, db.QueryRowContext(ctx, `SELECT cache_creation_30m_tokens, cache_creation_12h_tokens, account_cost_started_at, account_cost_identity_hash FROM usage_logs WHERE id=$1`, usage.ID).Scan(&actual30m, &actual12h, &actualStartedAt, &actualIdentity))
+	var hasNoExtraAttribution bool
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT cache_creation_30m_tokens, cache_creation_12h_tokens,
+		account_cost_started_at IS NULL AND account_cost_identity_hash IS NULL AND account_cost_pending_id IS NULL
+		FROM usage_logs WHERE id=$1`, usage.ID).Scan(&actual30m, &actual12h, &hasNoExtraAttribution))
 	require.Equal(t, 17, actual30m)
 	require.Equal(t, 38, actual12h)
-	require.True(t, startedAt.Equal(actualStartedAt))
-	require.Equal(t, identity, actualIdentity)
+	require.True(t, hasNoExtraAttribution, "official usage logging no longer writes carpool registration fields")
 }
