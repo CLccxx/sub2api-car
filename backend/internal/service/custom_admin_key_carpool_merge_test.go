@@ -66,6 +66,15 @@ func TestScopedAdminResetAuthorizesBeforeCachedCoordinatorResult(t *testing.T) {
 	}
 }
 
+type subscriptionCostReadStub struct {
+	SubscriptionCostRepository
+	read func(context.Context, int64, time.Time) (*SubscriptionCostSnapshot, error)
+}
+
+func (s *subscriptionCostReadStub) Read(ctx context.Context, id int64, now time.Time) (*SubscriptionCostSnapshot, error) {
+	return s.read(ctx, id, now)
+}
+
 func TestScopedAdminUsageOnlyIncludesSubscriptionCostProjection(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	account := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, GroupIDs: []int64{1}, Credentials: map[string]any{"access_token": "fixture-token", "chatgpt_account_id": "identity"}, Extra: map[string]any{

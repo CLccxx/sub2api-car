@@ -1,21 +1,11 @@
 package service
 
 import (
-	"context"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
-
-type subscriptionCostReadStub struct {
-	SubscriptionCostRepository
-	read func(context.Context, int64, time.Time) (*SubscriptionCostSnapshot, error)
-}
-
-func (s *subscriptionCostReadStub) Read(ctx context.Context, id int64, now time.Time) (*SubscriptionCostSnapshot, error) {
-	return s.read(ctx, id, now)
-}
 
 func TestSubscriptionCostSnapshotRejectsDifferentCycle(t *testing.T) {
 	reset := time.Now()

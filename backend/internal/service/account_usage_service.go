@@ -812,7 +812,8 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 	}
 
 	if !account.IsShadow() && account.IsOpenAIOAuth() && s.openAIQuotaService != nil {
-		if snapshot, err := s.openAIQuotaService.readSubscriptionCost(ctx, account.ID, now); err == nil && snapshot != nil {
+		snapshotCtx := WithScopedAdminAccountOperation(ctx, "accounts.usage.read")
+		if snapshot, err := s.openAIQuotaService.readSubscriptionCost(snapshotCtx, account.ID, now); err == nil && snapshot != nil {
 			observation := snapshot.Observation
 			if usage.SevenDay == nil || usage.SevenDay.ResetsAt == nil || !usage.SevenDay.ResetsAt.After(now) {
 				usage.SevenDay = &UsageProgress{Utilization: observation.Utilization, ResetsAt: &observation.ResetAt, RemainingSeconds: int(observation.ResetAt.Sub(now).Seconds())}
