@@ -19,6 +19,7 @@ export interface SharedAccountUsage {
     estimate_source?: UsageEstimateSource
   } | null
   reset_credits: number | null
+  reset_credit_expirations?: string[]
   credits: { has_credits: boolean; unlimited: boolean; balance: string | null } | null
 }
 

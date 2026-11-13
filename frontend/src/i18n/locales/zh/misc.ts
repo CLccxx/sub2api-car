@@ -187,6 +187,8 @@ export default {
       legacyEstimateHint: '本周期没有满额前记录，订阅基准按 $1,600 计算；下次重置后重新记录。',
       resetIn: '距离窗口重置',
       resetCredits: '剩余重置次数',
+      resetCreditExpirations: '重置卡到期时间',
+      resetCreditExpirationsPartial: '部分重置卡暂无到期时间。',
       points: 'Codex 剩余点数',
       unknown: '暂无数据',
       unlimited: '无限',

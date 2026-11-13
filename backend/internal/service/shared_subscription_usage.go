@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,12 +26,13 @@ func ProvideSharedSubscriptionUsageService(subscriptions UserSubscriptionReposit
 // SharedSubscriptionUsage is an allowlisted user projection, never an Account
 // or OpenAIQuotaUsage: those administrator types contain private identifiers.
 type SharedSubscriptionUsage struct {
-	Status             string             `json:"status"`
-	UpdatedAt          *time.Time         `json:"updated_at"`
-	RefreshAvailableAt *time.Time         `json:"refresh_available_at"`
-	SevenDay           *SharedUsageWindow `json:"seven_day"`
-	ResetCredits       *int               `json:"reset_credits"`
-	Credits            *OpenAICredits     `json:"credits"`
+	Status                 string             `json:"status"`
+	UpdatedAt              *time.Time         `json:"updated_at"`
+	RefreshAvailableAt     *time.Time         `json:"refresh_available_at"`
+	SevenDay               *SharedUsageWindow `json:"seven_day"`
+	ResetCredits           *int               `json:"reset_credits"`
+	ResetCreditExpirations []time.Time        `json:"reset_credit_expirations,omitempty"`
+	Credits                *OpenAICredits     `json:"credits"`
 }
 
 type SharedUsageWindow struct {
@@ -51,9 +53,8 @@ type sharedUsageStatsReader interface {
 }
 
 type sharedUsageCacheEntry struct {
-	view            SharedSubscriptionUsage
-	creditExpiresAt *time.Time
-	loading         bool
+	view    SharedSubscriptionUsage
+	loading bool
 }
 
 type SharedSubscriptionUsageService struct {
@@ -124,8 +125,9 @@ func (s *SharedSubscriptionUsageService) Get(ctx context.Context, userID, subscr
 	if view.SevenDay != nil && view.SevenDay.ResetsAt != nil && !view.SevenDay.ResetsAt.After(s.now()) {
 		view.SevenDay = nil
 	}
-	if entry.creditExpiresAt != nil && !entry.creditExpiresAt.After(s.now()) {
+	if len(view.ResetCreditExpirations) > 0 && !view.ResetCreditExpirations[0].After(s.now()) {
 		view.ResetCredits = nil
+		view.ResetCreditExpirations = nil
 	}
 	return &view, nil
 }
@@ -259,12 +261,14 @@ func querySharedAccountUsage(ctx context.Context, accountID int64, quota sharedU
 	if credits := usage.RateLimitResetCredits; credits != nil && !credits.availableCountMissing && credits.AvailableCount >= 0 {
 		count := credits.AvailableCount
 		entry.view.ResetCredits = &count
-		for _, credit := range credits.Credits {
-			if expiry, err := time.Parse(time.RFC3339, credit.ExpiresAt); err == nil {
-				if entry.creditExpiresAt == nil || expiry.Before(*entry.creditExpiresAt) {
-					entry.creditExpiresAt = &expiry
+		if count > 0 {
+			for _, credit := range credits.Credits {
+				if expiry, err := time.Parse(time.RFC3339, credit.ExpiresAt); err == nil {
+					entry.view.ResetCreditExpirations = append(entry.view.ResetCreditExpirations, expiry.UTC())
 				}
 			}
+			slices.SortFunc(entry.view.ResetCreditExpirations, time.Time.Compare)
+			entry.view.ResetCreditExpirations = entry.view.ResetCreditExpirations[:min(count, len(entry.view.ResetCreditExpirations))]
 		}
 	}
 	if usage.Credits != nil && !usage.Credits.statusMissing {
