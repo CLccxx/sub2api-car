@@ -189,6 +189,8 @@ export default {
       legacyEstimateHint: 'No pre-exhaustion record exists for this cycle. A $1,600 subscription baseline applies until the next reset.',
       resetIn: 'Window resets in',
       resetCredits: 'Resets remaining',
+      resetCreditExpirations: 'Reset card expirations',
+      resetCreditExpirationsPartial: 'Some reset cards have no reported expiration time.',
       points: 'Codex credits remaining',
       unknown: 'No data',
       unlimited: 'Unlimited',

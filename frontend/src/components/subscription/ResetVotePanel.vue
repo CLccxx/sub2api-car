@@ -2,7 +2,26 @@
   <div class="min-w-0 space-y-3 border-t border-gray-100 pt-3 dark:border-dark-700" data-test="reset-vote-panel">
     <dl class="grid min-w-0 grid-cols-2 gap-x-4 gap-y-3 text-sm">
       <div class="min-w-0">
-        <dt class="text-xs text-gray-500 dark:text-gray-400">{{ t('userSubscriptions.sharedUsage.resetCredits') }}</dt>
+        <dt class="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+          <span>{{ t('userSubscriptions.sharedUsage.resetCredits') }}</span>
+          <HelpTooltip
+            v-if="hasCredits && creditExpirations.length"
+            trigger="both" width-class="w-52"
+            :trigger-label="t('userSubscriptions.sharedUsage.resetCreditExpirations')"
+          >
+            <div data-test="shared-usage-reset-credit-expirations">
+              <p class="font-medium">{{ t('userSubscriptions.sharedUsage.resetCreditExpirations') }}</p>
+              <ul class="mt-1 max-h-48 space-y-0.5 overflow-y-auto tabular-nums">
+                <li v-for="(expiration, index) in creditExpirations" :key="index">
+                  <time :datetime="expiration.iso">{{ formatDateTimeToMinute(expiration.iso, locale) }}</time>
+                </li>
+              </ul>
+              <p v-if="creditExpirations.length < (currentCredits ?? 0)" class="mt-2 text-gray-300">
+                {{ t('userSubscriptions.sharedUsage.resetCreditExpirationsPartial') }}
+              </p>
+            </div>
+          </HelpTooltip>
+        </dt>
         <dd class="mt-1 flex min-h-8 flex-wrap items-center gap-x-3 gap-y-1">
           <span data-test="shared-usage-reset-credits" class="break-all font-medium tabular-nums text-gray-900 dark:text-gray-100">{{ creditText }}</span>
           <button
@@ -77,6 +96,7 @@ import { useIntervalFn } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import subscriptionsAPI, { type ResetVoteView } from '@/api/subscriptions'
 import BaseDialog from '@/components/common/BaseDialog.vue'
+import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { formatDateTimeToMinute } from '@/utils/format'
 
@@ -84,10 +104,11 @@ const props = defineProps<{
   subscriptionId: number
   expiresAt: string | null
   resetCredits: number | null
+  resetCreditExpirations?: string[]
   usageAvailable: boolean
 }>()
 const emit = defineEmits<{ completed: [proposalId: number] }>()
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const view = ref<ResetVoteView | null>(null)
 const loadFailed = ref(false)
 const actionFailed = ref(false)
@@ -112,9 +133,18 @@ useIntervalFn(() => { now.value = Date.now() }, 1000)
 const expired = computed(() => props.expiresAt !== null && (!Number.isFinite(Date.parse(props.expiresAt)) || Date.parse(props.expiresAt) <= now.value))
 const proposal = computed(() => view.value?.proposal ?? null)
 const deadline = computed(() => Date.parse(proposal.value?.expires_at ?? ''))
-const hasCredits = computed(() => typeof props.resetCredits === 'number' && Number.isFinite(props.resetCredits) && props.resetCredits > 0)
-const creditText = computed(() => typeof props.resetCredits === 'number' && Number.isFinite(props.resetCredits) && props.resetCredits >= 0
-  ? props.resetCredits : t('userSubscriptions.sharedUsage.unknown'))
+const creditExpirations = computed(() => (props.resetCreditExpirations ?? [])
+  .map(iso => ({ iso, timestamp: Date.parse(iso) }))
+  .filter(expiration => Number.isFinite(expiration.timestamp))
+  .sort((a, b) => a.timestamp - b.timestamp))
+const currentCredits = computed(() => {
+  const firstExpiration = creditExpirations.value[0]
+  if (firstExpiration && firstExpiration.timestamp <= now.value) return null
+  const count = props.resetCredits
+  return typeof count === 'number' && Number.isFinite(count) && count >= 0 ? count : null
+})
+const hasCredits = computed(() => !expired.value && (currentCredits.value ?? 0) > 0)
+const creditText = computed(() => currentCredits.value ?? t('userSubscriptions.sharedUsage.unknown'))
 const electorateMatches = computed(() => !!view.value && Number.isInteger(view.value.required_count) && view.value.required_count > 0 && view.value.member_count === view.value.required_count)
 const canCreate = computed(() => !expired.value && !loadFailed.value && props.usageAvailable && hasCredits.value && electorateMatches.value &&
   view.value?.can_create && !view.value.blocked_reason && (!proposal.value || terminalStates.includes(proposal.value.status)))

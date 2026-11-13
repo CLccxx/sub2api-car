@@ -17,7 +17,10 @@ const sample = () => ({
   seven_day: { utilization: 37.5, resets_at: '2026-10-10T18:30:00Z', estimated_total_cost: 250.12, credits_used_cost: 0, estimate_frozen: false, estimate_source: 'dynamic' },
   reset_credits: 1, credits: { has_credits: true, unlimited: false, balance: '123.4500' }
 })
-const open = () => mount(SharedAccountUsage, { props: { subscriptionId: 12, expiresAt: '2099-01-01T00:00:00Z' }, global: { stubs: { Icon: true, HelpTooltip: true } } })
+const open = (stubTooltip = true) => mount(SharedAccountUsage, {
+  props: { subscriptionId: 12, expiresAt: '2099-01-01T00:00:00Z' },
+  global: { stubs: { Icon: true, HelpTooltip: stubTooltip, teleport: true } }
+})
 enableAutoUnmount(afterEach)
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] })
@@ -28,6 +31,26 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers())
 
 describe('SharedAccountUsage', () => {
+  it('shows one expiration per card in the reset count tooltip and hides expired details', async () => {
+    const first = new Date(now.getTime() + 2000).toISOString()
+    const later = new Date(now.getTime() + 3600_000).toISOString()
+    getSharedAccountUsage.mockResolvedValueOnce({
+      ...sample(), reset_credits: 4, reset_credit_expirations: [later, first, first, 'invalid']
+    })
+    const wrapper = open(false)
+    await flushPromises()
+    expect(wrapper.find('button[aria-label="userSubscriptions.sharedUsage.resetCreditExpirations"]').exists()).toBe(true)
+    const details = wrapper.get('[data-test="shared-usage-reset-credit-expirations"]')
+    expect(details.findAll('time').map(el => el.attributes('datetime'))).toEqual([first, first, later])
+    expect(details.text()).toContain('userSubscriptions.sharedUsage.resetCreditExpirationsPartial')
+    expect(wrapper.get('[data-test="shared-usage-reset-credits"]').text()).toBe('4')
+
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(wrapper.find('[data-test="shared-usage-reset-credit-expirations"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="shared-usage-reset-credits"]').text()).toBe('userSubscriptions.sharedUsage.unknown')
+    expect(getSharedAccountUsage).toHaveBeenCalledTimes(1)
+  })
+
   it('offers a confirmed reset request next to available credits without upstream polling', async () => {
     getResetVote.mockResolvedValue({ required_count: 4, member_count: 4, can_create: true, blocked_reason: null, proposal: null })
     const wrapper = open()

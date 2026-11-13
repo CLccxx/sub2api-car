@@ -291,14 +291,37 @@ func TestSharedSubscriptionUsageExpiresCachedObservations(t *testing.T) {
 	svc, _, _, quota, _, now := sharedUsageFixture(t)
 	quota.payload.RateLimit.SecondaryWindow.ResetAt = now.Add(10 * time.Second).Unix()
 	quota.payload.RateLimitResetCredits.Credits = []OpenAIRateLimitResetCreditDetail{{ExpiresAt: now.Add(10 * time.Second).Format(time.RFC3339)}}
-	_, err := svc.Get(context.Background(), 7, 1)
+	initial, err := svc.Get(context.Background(), 7, 1)
 	require.NoError(t, err)
+	require.Len(t, initial.ResetCreditExpirations, 1)
 	*now = now.Add(11 * time.Second)
 	result, err := svc.Get(context.Background(), 7, 1)
 	require.NoError(t, err)
 	require.Nil(t, result.SevenDay, "past reset timestamp is not proof of zero usage")
 	require.Nil(t, result.ResetCredits, "expired cached credit count needs a new observation")
+	require.Empty(t, result.ResetCreditExpirations)
 	require.Equal(t, int64(1), quota.calls.Load())
+}
+
+func TestSharedSubscriptionUsageProjectsOnlyResetCreditExpirationTimes(t *testing.T) {
+	svc, _, _, quota, _, now := sharedUsageFixture(t)
+	earliest := now.Add(time.Hour).UTC()
+	later := now.Add(48 * time.Hour).UTC()
+	quota.payload.RateLimitResetCredits = &OpenAIRateLimitResetCredits{
+		AvailableCount: 4,
+		Credits: []OpenAIRateLimitResetCreditDetail{
+			{ExpiresAt: later.Format(time.RFC3339)}, {ExpiresAt: "invalid"},
+			{ExpiresAt: earliest.Format(time.RFC3339)}, {ExpiresAt: earliest.Format(time.RFC3339)},
+		},
+	}
+	quota.payload.autoResetCandidates = []openAIAutoResetCreditCandidate{{ID: "private-reset-card-id"}}
+	result, err := svc.Get(context.Background(), 7, 1)
+	require.NoError(t, err)
+	require.Equal(t, 4, *result.ResetCredits)
+	require.Equal(t, []time.Time{earliest, earliest, later}, result.ResetCreditExpirations)
+	body, err := json.Marshal(result)
+	require.NoError(t, err)
+	require.NotContains(t, string(body), "private-reset-card-id")
 }
 
 func TestSharedSubscriptionUsageMissingFieldsAreNotZero(t *testing.T) {
