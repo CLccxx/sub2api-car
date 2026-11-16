@@ -11,6 +11,7 @@ type ResetVoteView struct {
 	RequiredCount   int                    `json:"required_count"`
 	MemberCount     int                    `json:"member_count"`
 	CanCreate       bool                   `json:"can_create"`
+	Min7DPercent    float64                `json:"min_7d_used_percent,omitempty"`
 	BlockedReason   *string                `json:"blocked_reason"`
 	Proposal        *ResetVoteProposalView `json:"proposal"`
 }
@@ -41,6 +42,7 @@ type CarpoolVoteEligibility struct {
 	MembershipRevision int64
 	ReceiptCount       int64
 	OperationCount     int64
+	Min7DPercent       float64
 	BlockedReason      string
 }
 
@@ -65,7 +67,7 @@ type CarpoolResetVoteRepository interface {
 	Pending(context.Context) ([]int64, error)
 	Load(context.Context, int64) (*CarpoolResetVote, error)
 	Prepare(context.Context, int64, CarpoolResetObservation, string, string) (bool, error)
-	Dispatch(context.Context, int64) (bool, error)
+	Dispatch(context.Context, int64, *CarpoolResetObservation) (bool, error)
 	AwaitConfirmation(context.Context, int64) error
 	Fail(context.Context, int64, string) error
 	Succeed(context.Context, int64, *OpenAIQuotaResetResult) (int64, error)

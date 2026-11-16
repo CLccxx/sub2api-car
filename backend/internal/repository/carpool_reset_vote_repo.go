@@ -51,9 +51,11 @@ func voteOwnerGroup(ctx context.Context, q carpoolResetQuerier, user, subscripti
 func voteEligibility(ctx context.Context, q carpoolResetQuerier, group int64) (*service.CarpoolVoteEligibility, error) {
 	e := &service.CarpoolVoteEligibility{GroupID: group, ScopeVersion: 1}
 	var account int64
-	err := q.QueryRowContext(ctx, `SELECT a.id FROM groups g JOIN account_groups ag ON ag.group_id=g.id JOIN accounts a ON a.id=ag.account_id
+	var storedMinimum sql.NullString
+	err := q.QueryRowContext(ctx, `SELECT a.id, a.extra->>$2::text FROM groups g JOIN account_groups ag ON ag.group_id=g.id JOIN accounts a ON a.id=ag.account_id
  WHERE g.id=$1 AND g.deleted_at IS NULL AND g.status='active' AND g.platform='openai' AND g.subscription_type='subscription' AND a.deleted_at IS NULL
- AND (SELECT count(*) FROM account_groups other JOIN accounts b ON b.id=other.account_id WHERE other.group_id=g.id AND b.deleted_at IS NULL)=1`, group).Scan(&account)
+ AND (SELECT count(*) FROM account_groups other JOIN accounts b ON b.id=other.account_id WHERE other.group_id=g.id AND b.deleted_at IS NULL)=1`,
+		group, service.ResetVoteMin7DPercentExtraKey).Scan(&account, &storedMinimum)
 	if errors.Is(err, sql.ErrNoRows) {
 		e.BlockedReason = "account_unavailable"
 		return e, nil
@@ -68,6 +70,13 @@ func voteEligibility(ctx context.Context, q carpoolResetQuerier, group int64) (*
 	if e.Source == nil {
 		e.BlockedReason = "account_unavailable"
 		return e, nil
+	}
+	e.Min7DPercent = service.DefaultResetVoteMin7DPercent
+	if storedMinimum.Valid {
+		e.Min7DPercent, err = service.ParseResetVoteMin7DPercent(storedMinimum.String)
+		if err != nil {
+			return nil, err
+		}
 	}
 	rows, err := q.QueryContext(ctx, `SELECT DISTINCT ON(s.user_id) s.user_id,s.id,s.starts_at FROM user_subscriptions s
  JOIN users u ON u.id=s.user_id WHERE s.group_id IN (`+carpoolAccountSubscriptionGroups+`)
@@ -191,7 +200,7 @@ func validateVote(ctx context.Context, tx *sql.Tx, p *service.CarpoolResetVote, 
 }
 
 func voteView(ctx context.Context, tx *sql.Tx, user int64, e *service.CarpoolVoteEligibility, p *service.CarpoolResetVote) (*service.ResetVoteView, error) {
-	v := &service.ResetVoteView{RequiredCount: e.RequiredCount, MemberCount: len(e.Members), CanCreate: e.BlockedReason == ""}
+	v := &service.ResetVoteView{RequiredCount: e.RequiredCount, MemberCount: len(e.Members), CanCreate: e.BlockedReason == "", Min7DPercent: e.Min7DPercent}
 	if e.BlockedReason != "" {
 		v.BlockedReason = &e.BlockedReason
 	}
@@ -303,6 +312,12 @@ func (r *carpoolResetVoteRepository) mutate(ctx context.Context, user, subscript
 				return nil, err
 			}
 			if view.CanCreate && expected != nil && voteEligibilityReason(*expected, *e) == "" {
+				if !(o.Utilization >= e.Min7DPercent) {
+					view.CanCreate = false
+					reason := "usage_below_minimum"
+					view.BlockedReason = &reason
+					return view, tx.Commit()
+				}
 				encoded, _ := json.Marshal(e)
 				observed, _ := json.Marshal(o)
 				p, err = scanVote(tx.QueryRowContext(ctx, `INSERT INTO carpool_reset_votes(group_id,account_id,created_by,creation_key,eligibility,observation,required_count)

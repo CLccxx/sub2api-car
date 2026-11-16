@@ -37,7 +37,7 @@ func carpoolMonitorSchemaDB(t *testing.T, accountScope bool) *sql.DB {
 		CREATE TABLE users(id bigint PRIMARY KEY,status text DEFAULT 'active',deleted_at timestamptz);
  INSERT INTO users(id) SELECT generate_series(1,1000);
 		CREATE TABLE groups (id bigint PRIMARY KEY, status text, platform text, subscription_type text, carpool_members int, deleted_at timestamptz, weekly_limit_usd numeric);
-		CREATE TABLE accounts (id bigint PRIMARY KEY, platform text, type text, status text, parent_account_id bigint, credentials jsonb, deleted_at timestamptz, auto_pause_on_expired boolean DEFAULT false, expires_at timestamptz);
+		CREATE TABLE accounts (id bigint PRIMARY KEY, platform text, type text, status text, parent_account_id bigint, credentials jsonb, extra jsonb, deleted_at timestamptz, auto_pause_on_expired boolean DEFAULT false, expires_at timestamptz);
 		CREATE TABLE account_groups (account_id bigint, group_id bigint, PRIMARY KEY(account_id,group_id));
 		CREATE TABLE user_subscriptions (id bigint PRIMARY KEY, user_id bigint, group_id bigint, status text, deleted_at timestamptz,
 		 starts_at timestamptz DEFAULT now(), expires_at timestamptz DEFAULT now()+interval '1 day', updated_at timestamptz DEFAULT now(),

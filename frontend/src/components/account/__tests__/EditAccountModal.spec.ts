@@ -1944,6 +1944,25 @@ describe('EditAccountModal OpenAI 自动使用重置卡', () => {
     expect(updateAccountMock).not.toHaveBeenCalled()
     wrapper.unmount()
   })
+
+  it('loads and saves the account vote minimum even when automatic reset is off', async () => {
+    const account = buildOpenAIOAuthParentAccount()
+    account.extra = { reset_vote_min_7d_percent: 80 }
+    updateAccountMock.mockResolvedValue(account)
+    const wrapper = mountModal(account)
+    const input = wrapper.get<HTMLInputElement>('#reset-vote-min-7d-percent')
+    expect(input.element.value).toBe('80')
+    await input.setValue('0')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock).not.toHaveBeenCalled()
+    await input.setValue('85.5')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).toMatchObject({
+      auto_reset_credit_enabled: false,
+      reset_vote_min_7d_percent: 85.5
+    })
+    wrapper.unmount()
+  })
 })
 
 describe('EditAccountModal gemini explicit cache upstream switch', () => {

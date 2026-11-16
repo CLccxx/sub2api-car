@@ -493,6 +493,11 @@ func (s *OpenAIQuotaService) resetCreditRaw(ctx context.Context, accountID int64
 		"code", payload.Code,
 		"windows_reset", payload.WindowsReset,
 	)
+	// Normalize the upstream success alias at the boundary so manual, automatic,
+	// and vote resets agree on the result stored by the coordinator.
+	if payload.Code == "reset" && payload.WindowsReset > 0 {
+		payload.Code = "ok"
+	}
 	if payload.Code == "ok" && payload.WindowsReset > 0 && s.resetReceiptRecorder != nil {
 		// An upstream consume has already succeeded. Persist evidence even if the
 		// client disconnects, but never report storage failure as consume failure.

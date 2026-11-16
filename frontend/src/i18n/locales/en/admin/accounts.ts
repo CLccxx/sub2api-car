@@ -1059,6 +1059,11 @@ export default {
 	      failed: 'Reset request failed'
 	    }
 	  },
+      resetVote: {
+        minimumUsage: 'Minimum 7d usage for reset votes (%)',
+        hint: 'Usage must reach this percentage to start a vote. Usage is checked again before a credit is used.',
+        invalidMinimum: 'The reset vote minimum must be between 0.1% and 100%.'
+      },
       autoResetCredit: {
 	    title: 'Automatically use reset credits',
 	    hint: 'Uses the earliest-expiring available credit only when actual usage reaches a threshold. Off by default; the account remains paused if no credit is available or reset fails.',

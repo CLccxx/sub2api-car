@@ -19,7 +19,7 @@ func (r *voteRepoStub) Load(context.Context, int64) (*CarpoolResetVote, error) {
 	p := r.p
 	return &p, nil
 }
-func (r *voteRepoStub) Dispatch(context.Context, int64) (bool, error) {
+func (r *voteRepoStub) Dispatch(context.Context, int64, *CarpoolResetObservation) (bool, error) {
 	r.dispatches++
 	return r.allow, nil
 }

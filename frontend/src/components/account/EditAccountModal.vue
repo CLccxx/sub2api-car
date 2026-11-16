@@ -2879,6 +2879,25 @@
         <p class="input-hint">{{ t('admin.accounts.autoResetCredit.thresholdHint') }}</p>
       </div>
 
+      <div
+        v-if="isResetVoteAccount"
+        class="space-y-2 border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <label for="reset-vote-min-7d-percent" class="input-label">{{ t('admin.accounts.resetVote.minimumUsage') }}</label>
+        <input
+          id="reset-vote-min-7d-percent"
+          v-model.number="resetVoteMin7dPercent"
+          type="number"
+          min="0.1"
+          max="100"
+          step="any"
+          required
+          class="input max-w-xs"
+          aria-describedby="reset-vote-min-7d-percent-hint"
+        />
+        <p id="reset-vote-min-7d-percent-hint" class="input-hint">{{ t('admin.accounts.resetVote.hint') }}</p>
+      </div>
+
       <!-- 配额控制 (Anthropic OAuth/SetupToken: 亲和 + 窗口费用 + 会话 + RPM 等) -->
       <div
         v-if="account?.platform === 'anthropic' && (account?.type === 'oauth' || account?.type === 'setup-token')"
@@ -4095,6 +4114,8 @@ const autoPause7dDisabled = ref(false)
 const autoResetCreditEnabled = ref(false)
 const autoResetCredit5hThreshold = ref(100)
 const autoResetCredit7dThreshold = ref(100)
+const resetVoteMin7dPercent = ref<number | string>(1)
+const isResetVoteAccount = computed(() => props.account?.platform === 'openai' && props.account?.type === 'oauth' && !isSparkShadow.value)
 const upstreamBillingAutoProbeEnabled = ref(false)
 const upstreamBillingRateSyncEnabled = ref(false)
 const mixedScheduling = ref(false) // For antigravity accounts: enable mixed scheduling
@@ -4656,6 +4677,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 		typeof extra?.auto_reset_credit_5h_threshold === 'number' ? extra.auto_reset_credit_5h_threshold * 100 : 100
 	autoResetCredit7dThreshold.value =
 		typeof extra?.auto_reset_credit_7d_threshold === 'number' ? extra.auto_reset_credit_7d_threshold * 100 : 100
+	resetVoteMin7dPercent.value =
+		typeof extra?.reset_vote_min_7d_percent === 'number' ? extra.reset_vote_min_7d_percent : 1
 	upstreamBillingAutoProbeEnabled.value = extra?.upstream_billing_probe_enabled === true
   upstreamBillingRateSyncEnabled.value =
     upstreamBillingAutoProbeEnabled.value && extra?.upstream_billing_rate_sync_enabled === true
@@ -5645,6 +5668,13 @@ const handleSubmit = async () => {
   if (!props.account) return
   const accountID = props.account.id
 
+  const resetVoteMinimum = resetVoteMin7dPercent.value
+  if (isResetVoteAccount.value && (typeof resetVoteMinimum !== 'number' || !Number.isFinite(resetVoteMinimum) ||
+    resetVoteMinimum < 0.1 || resetVoteMinimum > 100)) {
+    appStore.showError(t('admin.accounts.resetVote.invalidMinimum'))
+    return
+  }
+
   if (form.status !== 'active' && form.status !== 'inactive' && form.status !== 'error') {
     appStore.showError(t('admin.accounts.pleaseSelectStatus'))
     return
@@ -6284,6 +6314,7 @@ const handleSubmit = async () => {
 			newExtra.auto_reset_credit_enabled = autoResetCreditEnabled.value
 			newExtra.auto_reset_credit_5h_threshold = autoResetCredit5hThreshold.value / 100
 			newExtra.auto_reset_credit_7d_threshold = autoResetCredit7dThreshold.value / 100
+				newExtra.reset_vote_min_7d_percent = resetVoteMinimum
 		}
 		// 运行态只允许后端服务更新，账号编辑不得回写旧状态。
 		delete newExtra.codex_auto_reset_credit_state

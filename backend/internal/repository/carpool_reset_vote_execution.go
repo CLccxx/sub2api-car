@@ -63,13 +63,13 @@ func (r *carpoolResetVoteRepository) Load(ctx context.Context, id int64) (*servi
 }
 
 func (r *carpoolResetVoteRepository) Prepare(ctx context.Context, id int64, o service.CarpoolResetObservation, credit, request string) (bool, error) {
-	return r.prepareOrDispatch(ctx, id, &o, credit, request)
+	return r.prepareOrDispatch(ctx, id, &o, credit, request, false)
 }
-func (r *carpoolResetVoteRepository) Dispatch(ctx context.Context, id int64) (bool, error) {
-	return r.prepareOrDispatch(ctx, id, nil, "", "")
+func (r *carpoolResetVoteRepository) Dispatch(ctx context.Context, id int64, o *service.CarpoolResetObservation) (bool, error) {
+	return r.prepareOrDispatch(ctx, id, o, "", "", true)
 }
 
-func (r *carpoolResetVoteRepository) prepareOrDispatch(ctx context.Context, id int64, o *service.CarpoolResetObservation, credit, request string) (bool, error) {
+func (r *carpoolResetVoteRepository) prepareOrDispatch(ctx context.Context, id int64, o *service.CarpoolResetObservation, credit, request string, dispatch bool) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	tx, err := r.begin(ctx)
@@ -103,19 +103,21 @@ func (r *carpoolResetVoteRepository) prepareOrDispatch(ctx context.Context, id i
 		}
 		return true, tx.Commit()
 	}
-	if o != nil {
-		var now time.Time
-		if err = tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
-			return false, err
-		}
-		if o.ObservedAt.Before(now.Add(-2*time.Minute)) || !o.ResetAt.After(now.Add(time.Minute)) ||
-			o.ResetAt.Sub(p.Observation.ResetAt) > time.Minute || p.Observation.ResetAt.Sub(o.ResetAt) > time.Minute {
-			_, err = tx.ExecContext(ctx, `UPDATE carpool_reset_votes SET status='invalidated',reason='window_reset',updated_at=clock_timestamp() WHERE id=$1`, id)
-			if err != nil {
-				return false, err
-			}
-			return false, tx.Commit()
-		}
+	if o == nil {
+		return false, errors.New("missing vote reset observation")
+	}
+	var now time.Time
+	if err = tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		return false, err
+	}
+	if o.ObservedAt.Before(now.Add(-2*time.Minute)) || !o.ResetAt.After(now.Add(time.Minute)) ||
+		o.ResetAt.Sub(p.Observation.ResetAt) > time.Minute || p.Observation.ResetAt.Sub(o.ResetAt) > time.Minute {
+		return finishUnsentCarpoolVote(ctx, tx, id, "invalidated", "window_reset", dispatch)
+	}
+	if !(o.Utilization >= current.Min7DPercent) {
+		return finishUnsentCarpoolVote(ctx, tx, id, "failed", "usage_below_minimum", dispatch)
+	}
+	if !dispatch {
 		if p.CreditID == "" {
 			if credit == "" || request == "" {
 				return false, errors.New("missing vote reset identity")
@@ -138,6 +140,20 @@ func (r *carpoolResetVoteRepository) prepareOrDispatch(ctx context.Context, id i
 		return false, err
 	}
 	return true, tx.Commit()
+}
+
+func finishUnsentCarpoolVote(ctx context.Context, tx *sql.Tx, id int64, status, reason string, dispatch bool) (bool, error) {
+	if _, err := tx.ExecContext(ctx, `UPDATE carpool_reset_votes SET status=$2,reason=$3,updated_at=clock_timestamp() WHERE id=$1`, id, status, reason); err != nil {
+		return false, err
+	}
+	// During dispatch the coordinator already owns the intent and finalizes it
+	// when Dispatch returns false. At preparation an earlier intent can remain.
+	if !dispatch {
+		if err := closeUndispatchedVoteIntent(ctx, tx, id); err != nil {
+			return false, err
+		}
+	}
+	return false, tx.Commit()
 }
 
 func (r *carpoolResetVoteRepository) AwaitConfirmation(ctx context.Context, id int64) error {
