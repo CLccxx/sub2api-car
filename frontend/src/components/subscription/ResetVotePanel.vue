@@ -65,7 +65,8 @@
         </span>
       </div>
     </div>
-    <p v-if="!expired && view?.blocked_reason" class="break-words text-xs text-gray-500 dark:text-gray-400" role="status">{{ safeReason(view.blocked_reason) }}</p>
+    <p v-if="!expired && view?.blocked_reason" class="break-words text-xs text-gray-500 dark:text-gray-400" role="status">{{ safeReason(view.blocked_reason, minimumUsage) }}</p>
+    <p v-else-if="!expired && hasCredits && belowMinimum && (!proposal || terminalStates.includes(proposal.status)) && proposal?.reason !== 'usage_below_minimum'" class="break-words text-xs text-gray-500 dark:text-gray-400" role="status">{{ t('userSubscriptions.resetVote.minimumUsage', { percent: minimumUsage }) }}</p>
     <p v-if="!expired && pendingRequestId" class="break-words text-xs text-amber-700 dark:text-amber-300" role="status">{{ t('userSubscriptions.resetVote.pendingRequest') }}</p>
     <p v-if="loadFailed" class="break-words text-xs text-amber-700 dark:text-amber-300" role="status">{{ t('userSubscriptions.resetVote.loadFailed') }}</p>
     <p v-if="actionFailed && !confirmationOpen" class="break-words text-xs text-amber-700 dark:text-amber-300" role="alert">{{ t('userSubscriptions.resetVote.actionFailed') }}</p>
@@ -105,6 +106,7 @@ const props = defineProps<{
   expiresAt: string | null
   resetCredits: number | null
   resetCreditExpirations?: string[]
+  sevenDayUsedPercent?: number | null
   usageAvailable: boolean
 }>()
 const emit = defineEmits<{ completed: [proposalId: number] }>()
@@ -125,7 +127,7 @@ const terminalStates = ['completed', 'expired', 'invalidated', 'failed']
 const activeStates = ['voting', 'executing', 'awaiting_confirmation', 'applying']
 const reasonCodes = new Set([
   'not_configured', 'member_count_mismatch', 'account_unavailable', 'no_credit',
-  'usage_unavailable', 'reset_in_progress', 'source_changed', 'membership_changed',
+  'usage_unavailable', 'usage_below_minimum', 'reset_in_progress', 'source_changed', 'membership_changed',
   'window_reset', 'admin_reset', 'proposal_expired', 'reset_failed', 'confirmation_pending'
 ])
 useIntervalFn(() => { now.value = Date.now() }, 1000)
@@ -145,8 +147,11 @@ const currentCredits = computed(() => {
 })
 const hasCredits = computed(() => !expired.value && (currentCredits.value ?? 0) > 0)
 const creditText = computed(() => currentCredits.value ?? t('userSubscriptions.sharedUsage.unknown'))
+const minimumUsage = computed(() => view.value?.min_7d_used_percent ?? null)
+const belowMinimum = computed(() => minimumUsage.value !== null && typeof props.sevenDayUsedPercent === 'number' &&
+  props.sevenDayUsedPercent < minimumUsage.value)
 const electorateMatches = computed(() => !!view.value && Number.isInteger(view.value.required_count) && view.value.required_count > 0 && view.value.member_count === view.value.required_count)
-const canCreate = computed(() => !expired.value && !loadFailed.value && props.usageAvailable && hasCredits.value && electorateMatches.value &&
+const canCreate = computed(() => !expired.value && !loadFailed.value && props.usageAvailable && hasCredits.value && !belowMinimum.value && electorateMatches.value &&
   view.value?.can_create && !view.value.blocked_reason && (!proposal.value || terminalStates.includes(proposal.value.status)))
 const canAgree = computed(() => !expired.value && !loadFailed.value && electorateMatches.value && proposal.value?.status === 'voting' &&
   proposal.value.required_count === view.value?.required_count && proposal.value.can_agree && !proposal.value.my_vote && Number.isFinite(deadline.value) && deadline.value > now.value)
@@ -156,7 +161,10 @@ const statusText = computed(() => {
   return t(`userSubscriptions.resetVote.states.${status === 'voting' && deadline.value <= now.value ? 'expired' : status}`)
 })
 
-function safeReason(reason: string | null): string {
+function safeReason(reason: string | null, minimum: number | null = null): string {
+  if (reason === 'usage_below_minimum' && minimum !== null) {
+    return t('userSubscriptions.resetVote.minimumUsage', { percent: minimum })
+  }
   return reason ? t(`userSubscriptions.resetVote.reasons.${reasonCodes.has(reason) ? reason : 'unavailable'}`) : ''
 }
 

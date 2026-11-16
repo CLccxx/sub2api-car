@@ -64,6 +64,7 @@
       v-if="!expired"
       :subscription-id="subscriptionId" :expires-at="expiresAt" :reset-credits="usage?.reset_credits ?? null"
       :reset-credit-expirations="usage?.reset_credit_expirations"
+      :seven-day-used-percent="utilization"
       :usage-available="!loading && !failed && !rolledOver && usage?.status === 'ready'"
       @completed="emit('reset-completed', $event)"
     >

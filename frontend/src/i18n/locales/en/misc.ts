@@ -134,6 +134,7 @@ export default {
   userSubscriptions: {
     personalQuota: 'Personal Subscription Quota',
     resetVote: {
+      minimumUsage: 'Shared account 7d usage must reach {percent}% to start a vote or use a reset credit.',
       create: 'Request reset',
       retry: 'Retry pending request',
       retryConfirmTitle: 'Retry the same reset request?',
@@ -165,7 +166,8 @@ export default {
         member_count_mismatch: 'The active subscription membership changed. Refresh before starting another vote.',
         account_unavailable: 'The shared account is currently unavailable for voting.',
         no_credit: 'No reset credits are available.',
-        usage_unavailable: 'Reset-credit availability could not be confirmed.',
+        usage_unavailable: '7d usage or reset credit availability could not be confirmed.',
+        usage_below_minimum: 'Shared account 7d usage is below the reset vote minimum.',
         reset_in_progress: 'A reset is already in progress. Please wait for its outcome.',
         source_changed: 'The shared account configuration changed. Fresh approval is required.',
         membership_changed: 'The membership changed. Fresh approval is required.',

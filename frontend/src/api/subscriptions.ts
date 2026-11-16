@@ -38,6 +38,7 @@ export interface ResetVoteView {
   member_count: number
   can_create: boolean
   blocked_reason: string | null
+  min_7d_used_percent?: number
   request_resolved?: boolean
   proposal: {
     id: number

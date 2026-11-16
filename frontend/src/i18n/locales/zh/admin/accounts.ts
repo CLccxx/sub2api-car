@@ -1175,6 +1175,11 @@ export default {
 	      failed: '重置请求失败'
 	    }
 	  },
+      resetVote: {
+        minimumUsage: '重置投票 7d 最低已用百分比 (%)',
+        hint: '用量达到此比例才能发起投票。全员同意后，用卡前会再次检查。',
+        invalidMinimum: '重置投票门槛必须在 0.1% 到 100% 之间。'
+      },
       autoResetCredit: {
 	    title: '自动使用重置卡',
 	    hint: '仅在实际用量达到阈值时使用最早到期的可用卡；默认关闭。无卡或失败时账号保持暂停。',

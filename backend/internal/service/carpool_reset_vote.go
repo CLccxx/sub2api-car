@@ -98,6 +98,10 @@ func (s *CarpoolResetVoteService) Create(ctx context.Context, user, subscription
 	if !valid || !o.ResetAt.After(time.Now().Add(time.Minute)) {
 		return blockedResetVote(view, "usage_unavailable"), nil
 	}
+	if o.Utilization < e.Min7DPercent {
+		view.Min7DPercent = e.Min7DPercent
+		return blockedResetVote(view, "usage_below_minimum"), nil
+	}
 	if _, err = voteResetCandidate(u, "", time.Now()); err != nil {
 		return blockedResetVote(view, "no_credit"), nil
 	}
@@ -217,6 +221,7 @@ func (s *CarpoolResetVoteService) process(ctx context.Context, id int64) {
 	if p.Status != "executing" && p.Status != "awaiting_confirmation" {
 		return
 	}
+	var observation *CarpoolResetObservation
 	if !p.Dispatched {
 		u, err := s.quota.QueryUsageReadOnly(ctx, p.Eligibility.Source.AccountID)
 		if err != nil {
@@ -226,6 +231,7 @@ func (s *CarpoolResetVoteService) process(ctx context.Context, id int64) {
 		if !valid {
 			return
 		}
+		observation = &o
 		card, err := voteResetCandidate(u, p.CreditID, time.Now())
 		if err != nil {
 			_ = s.repo.Fail(ctx, id, "no_credit")
@@ -246,7 +252,7 @@ func (s *CarpoolResetVoteService) process(ctx context.Context, id int64) {
 	}
 	result, err := s.coordinator.Run(ctx, p.Eligibility.Source.AccountID, p.CreditID, p.RequestID,
 		func(callCtx context.Context, card, key string) (*OpenAIQuotaResetResult, error) {
-			ok, err := s.repo.Dispatch(callCtx, id)
+			ok, err := s.repo.Dispatch(callCtx, id, observation)
 			if err != nil {
 				return nil, err
 			}

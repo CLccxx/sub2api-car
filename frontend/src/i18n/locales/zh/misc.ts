@@ -132,6 +132,7 @@ export default {
   userSubscriptions: {
     personalQuota: '个人订阅配额',
     resetVote: {
+      minimumUsage: '共享账号 7d 已用额度达到 {percent}% 才能发起投票或用卡。',
       create: '申请重置',
       retry: '重试待确认申请',
       retryConfirmTitle: '重试同一次重置申请？',
@@ -163,7 +164,8 @@ export default {
         member_count_mismatch: '有效订阅成员已变更，请刷新后重新发起投票。',
         account_unavailable: '共享账号当前无法参与重置投票。',
         no_credit: '暂无可用重置卡。',
-        usage_unavailable: '暂时无法确认可用重置卡数量。',
+        usage_unavailable: '暂时无法确认 7d 用量或可用重置卡。',
+        usage_below_minimum: '共享账号的 7d 用量低于重置投票门槛。',
         reset_in_progress: '已有重置正在处理，请等待结果。',
         source_changed: '共享账号配置已变更，需要重新征得同意。',
         membership_changed: '成员已变更，需要重新征得同意。',

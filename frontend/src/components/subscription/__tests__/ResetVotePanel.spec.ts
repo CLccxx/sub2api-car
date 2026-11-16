@@ -90,6 +90,29 @@ describe('ResetVotePanel', () => {
     expect(wrapper.find('[data-test="reset-vote-create"]').exists()).toBe(false)
   })
 
+  it('shows the account minimum and does not offer creation until 7d usage reaches it', async () => {
+    getResetVote.mockResolvedValue({ ...idle(), min_7d_used_percent: 80 })
+    const wrapper = open({ sevenDayUsedPercent: 0 })
+    await flushPromises()
+    expect(wrapper.find('[data-test="reset-vote-create"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('userSubscriptions.resetVote.minimumUsage {"percent":80}')
+    await wrapper.setProps({ sevenDayUsedPercent: 80 })
+    expect(wrapper.find('[data-test="reset-vote-create"]').exists()).toBe(true)
+  })
+
+  it('keeps the historical vote failure separate from the current minimum', async () => {
+    getResetVote.mockResolvedValue({
+      ...voting({ status: 'failed', reason: 'usage_below_minimum' }),
+      min_7d_used_percent: 50,
+      can_create: true
+    })
+    const wrapper = open({ sevenDayUsedPercent: 82 })
+    await flushPromises()
+    expect(wrapper.text()).toContain('userSubscriptions.resetVote.reasons.usage_below_minimum')
+    expect(wrapper.text()).not.toContain('userSubscriptions.resetVote.minimumUsage')
+    expect(wrapper.find('[data-test="reset-vote-create"]').exists()).toBe(true)
+  })
+
   it('requires confirmation of unanimous approval and counts the initiator once', async () => {
     const wrapper = open()
     await showConfirmation(wrapper)

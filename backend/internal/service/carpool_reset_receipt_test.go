@@ -30,7 +30,7 @@ func (r *resetReceiptSpy) RecordResetReceipt(_ context.Context, id int64, identi
 }
 
 func TestCarpoolResetSuccessfulConsumeReceipt(t *testing.T) {
-	for _, scenario := range []string{"ok", "no_credit", "zero windows", "storage failure"} {
+	for _, scenario := range []string{"ok", "reset", "reset without windows", "already redeemed", "no_credit", "zero windows", "storage failure"} {
 		t.Run(scenario, func(t *testing.T) {
 			account := &Account{ID: 9, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"chatgpt_account_id": "shared"}}
 			repo := &stubQuotaAccountRepo{accounts: map[int64]*Account{9: account}}
@@ -41,6 +41,12 @@ func TestCarpoolResetSuccessfulConsumeReceipt(t *testing.T) {
 				require.Equal(t, "POST", r.Method)
 				w.Header().Set("Content-Type", "application/json")
 				switch scenario {
+				case "reset":
+					_, _ = w.Write([]byte(`{"code":"reset","windows_reset":2}`))
+				case "reset without windows":
+					_, _ = w.Write([]byte(`{"code":"reset","windows_reset":0}`))
+				case "already redeemed":
+					_, _ = w.Write([]byte(`{"code":"already_redeemed","windows_reset":0}`))
 				case "no_credit":
 					_, _ = w.Write([]byte(`{"code":"no_credit","windows_reset":0}`))
 				case "zero windows":
@@ -60,13 +66,17 @@ func TestCarpoolResetSuccessfulConsumeReceipt(t *testing.T) {
 			require.NoError(t, err, "receipt failure must not encourage another consume")
 			require.NotNil(t, result)
 			require.Equal(t, 1, calls)
-			if scenario == "ok" || scenario == "storage failure" {
+			if scenario == "ok" || scenario == "reset" || scenario == "storage failure" {
+				require.Equal(t, "ok", result.Code)
 				require.Equal(t, 1, recorder.calls)
 				require.Equal(t, CarpoolResetIdentityHash("shared"), recorder.identity)
 				require.Equal(t, CarpoolResetIdentityHash("stable-request"), recorder.request)
 				require.Equal(t, 2, recorder.windows)
 			} else {
 				require.Zero(t, recorder.calls)
+				if scenario == "reset without windows" {
+					require.Equal(t, "ok", result.Code, "an acknowledged reset with no window count still has an uncertain outcome")
+				}
 			}
 		})
 	}

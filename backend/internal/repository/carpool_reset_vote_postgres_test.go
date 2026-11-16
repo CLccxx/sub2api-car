@@ -58,6 +58,83 @@ func TestCarpoolVotePostgresQuorumAndIdempotency(t *testing.T) {
 	require.Equal(t, view.Proposal.ID, repeated.Proposal.ID)
 }
 
+func TestCarpoolVotePostgresSevenDayMinimum(t *testing.T) {
+	db := carpoolVoteTestDB(t)
+	ctx := context.Background()
+	r := NewCarpoolResetVoteRepository(db)
+	now := time.Now().UTC().Truncate(time.Second)
+	o := service.CarpoolResetObservation{ObservedAt: now, ResetAt: now.Add(24 * time.Hour)}
+	eligibility, err := r.Eligibility(ctx, 1, 1)
+	require.NoError(t, err)
+	key := "00000000-0000-4000-8000-000000000001"
+	view, err := r.Create(ctx, 1, 1, key, *eligibility, o)
+	require.NoError(t, err)
+	require.Nil(t, view.Proposal)
+	require.Equal(t, "usage_below_minimum", *view.BlockedReason)
+	require.Equal(t, 1.0, view.Min7DPercent)
+
+	_, err = db.Exec(`UPDATE accounts SET extra='{"reset_vote_min_7d_percent":80}' WHERE id=9`)
+	require.NoError(t, err)
+	o.Utilization = 79.9
+	view, err = r.Create(ctx, 1, 1, key, *eligibility, o)
+	require.NoError(t, err)
+	require.Nil(t, view.Proposal)
+	require.Equal(t, "usage_below_minimum", *view.BlockedReason)
+	require.Equal(t, 80.0, view.Min7DPercent)
+
+	o.Utilization = 80
+	view, err = r.Create(ctx, 1, 1, key, *eligibility, o)
+	require.NoError(t, err)
+	require.NotNil(t, view.Proposal)
+	for _, user := range []int64{2, 3, 4} {
+		view, err = r.Agree(ctx, user, user, view.Proposal.ID)
+		require.NoError(t, err)
+	}
+	require.Equal(t, "executing", view.Proposal.Status)
+	o.Utilization = 82
+	_, err = db.Exec(`UPDATE accounts SET extra='{"reset_vote_min_7d_percent":85}' WHERE id=9`)
+	require.NoError(t, err)
+	ok, err := r.Prepare(ctx, view.Proposal.ID, o, "card", "request")
+	require.NoError(t, err)
+	require.False(t, ok)
+	view, err = r.View(ctx, 1, 1)
+	require.NoError(t, err)
+	require.Equal(t, "failed", view.Proposal.Status)
+	require.Equal(t, "usage_below_minimum", *view.Proposal.Reason)
+}
+
+func TestCarpoolVotePostgresMinimumRaisedBeforeDispatch(t *testing.T) {
+	db := carpoolMonitorConcurrentPool(t, carpoolVoteTestDB(t))
+	r, v := createTestVote(t, db)
+	ctx := context.Background()
+	for _, user := range []int64{2, 3, 4} {
+		_, err := r.Agree(ctx, user, user, v.Proposal.ID)
+		require.NoError(t, err)
+	}
+	p, err := r.Load(ctx, v.Proposal.ID)
+	require.NoError(t, err)
+	ok, err := r.Prepare(ctx, p.ID, p.Observation, "card", "request")
+	require.NoError(t, err)
+	require.True(t, ok)
+	_, err = db.Exec(`UPDATE accounts SET extra='{"reset_vote_min_7d_percent":80}' WHERE id=9`)
+	require.NoError(t, err)
+
+	result, err := NewQuotaResetCoordinator(db).Run(ctx, 9, "card", "request",
+		func(ctx context.Context, _, _ string) (*service.OpenAIQuotaResetResult, error) {
+			ok, err := r.Dispatch(ctx, p.ID, &p.Observation)
+			require.NoError(t, err)
+			require.False(t, ok, "the saved observation no longer meets the minimum")
+			return &service.OpenAIQuotaResetResult{Code: "vote_invalidated"}, nil
+		})
+	require.NoError(t, err)
+	require.Equal(t, "vote_invalidated", result.Code)
+	quotaResetAssertOperation(t, db, 9, "request", "card", "failed")
+	view, err := r.View(ctx, 1, 1)
+	require.NoError(t, err)
+	require.Equal(t, "usage_below_minimum", *view.Proposal.Reason)
+	require.True(t, view.CanCreate, "rejection must not leave an unresolved consume")
+}
+
 func TestCarpoolVotePostgresInvalidation(t *testing.T) {
 	for _, change := range []string{
 		`UPDATE user_subscriptions SET expires_at=now()-interval '1 second' WHERE id=4`,
@@ -131,7 +208,7 @@ func TestCarpoolVotePostgresMonitorAndLocalRecovery(t *testing.T) {
 	ok, err := r.Prepare(ctx, p.ID, p.Observation, "card-one", "stable-request")
 	require.NoError(t, err)
 	require.True(t, ok)
-	ok, err = r.Dispatch(ctx, p.ID)
+	ok, err = r.Dispatch(ctx, p.ID, &p.Observation)
 	require.NoError(t, err)
 	require.True(t, ok)
 	now := time.Now().UTC().Truncate(time.Second).Add(time.Second)
@@ -245,7 +322,7 @@ func TestCarpoolVotePostgresLaterManualResetIsNotCoalesced(t *testing.T) {
 	ok, err := r.Prepare(ctx, p.ID, p.Observation, "card", "request")
 	require.NoError(t, err)
 	require.True(t, ok)
-	ok, err = r.Dispatch(ctx, p.ID)
+	ok, err = r.Dispatch(ctx, p.ID, &p.Observation)
 	require.NoError(t, err)
 	require.True(t, ok)
 	now := time.Now().UTC()
@@ -280,7 +357,7 @@ func TestCarpoolVotePostgresDispatchedUncertaintyDoesNotExpire(t *testing.T) {
 	ok, err := r.Prepare(ctx, p.ID, p.Observation, "card", "request")
 	require.NoError(t, err)
 	require.True(t, ok)
-	ok, err = r.Dispatch(ctx, p.ID)
+	ok, err = r.Dispatch(ctx, p.ID, &p.Observation)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.NoError(t, r.AwaitConfirmation(ctx, p.ID))
@@ -291,6 +368,12 @@ func TestCarpoolVotePostgresDispatchedUncertaintyDoesNotExpire(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "awaiting_confirmation", v.Proposal.Status)
 	require.False(t, v.CanCreate)
+
+	_, err = db.Exec(`UPDATE accounts SET extra='{"reset_vote_min_7d_percent":0}' WHERE id=9`)
+	require.NoError(t, err)
+	ok, err = r.Dispatch(ctx, p.ID, nil)
+	require.NoError(t, err)
+	require.True(t, ok, "an invalid stored minimum must not interrupt confirmation of an already dispatched request")
 }
 
 func TestCarpoolVotePostgresExpiredBeforeDispatchReleasesIntent(t *testing.T) {
@@ -316,7 +399,7 @@ func TestCarpoolVotePostgresExpiredBeforeDispatchReleasesIntent(t *testing.T) {
 	require.NoError(t, db.QueryRow(`SELECT status FROM quota_reset_operations`).Scan(&status))
 	require.Equal(t, "failed", status)
 	require.True(t, v.CanCreate, "a crash before dispatch must not permanently occupy the account")
-	ok, err = r.Dispatch(ctx, p.ID)
+	ok, err = r.Dispatch(ctx, p.ID, &p.Observation)
 	require.NoError(t, err)
 	require.False(t, ok)
 }
@@ -420,7 +503,7 @@ func dispatchAccountTestVote(t *testing.T, db *sql.DB) (service.CarpoolResetVote
 	ok, err := r.Prepare(ctx, p.ID, p.Observation, "card", "scope-request")
 	require.NoError(t, err)
 	require.True(t, ok)
-	ok, err = r.Dispatch(ctx, p.ID)
+	ok, err = r.Dispatch(ctx, p.ID, &p.Observation)
 	require.NoError(t, err)
 	require.True(t, ok)
 	return r, p
@@ -496,7 +579,7 @@ func TestCarpoolVotePostgresLegacyDispatchedRecovery(t *testing.T) {
 	r, p := dispatchAccountTestVote(t, db)
 	_, err := db.Exec(`UPDATE carpool_reset_votes SET eligibility=eligibility-'ScopeVersion',status='awaiting_confirmation'; UPDATE carpool_reset_vote_targets SET binding_revision=NULL`)
 	require.NoError(t, err)
-	ok, err := r.Dispatch(context.Background(), p.ID)
+	ok, err := r.Dispatch(context.Background(), p.ID, nil)
 	require.Error(t, err)
 	require.False(t, ok, "legacy uncertainty must never replay consumption under a new electorate")
 	_, err = db.Exec(`INSERT INTO quota_reset_operations(account_id,request_id,credit_id,status,result,completed_at) VALUES(9,'scope-request','card','succeeded','{"code":"ok","windows_reset":1}',now())`)
