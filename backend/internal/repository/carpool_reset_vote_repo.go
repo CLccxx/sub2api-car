@@ -73,10 +73,13 @@ func voteEligibility(ctx context.Context, q carpoolResetQuerier, group int64) (*
 	}
 	e.Min7DPercent = service.DefaultResetVoteMin7DPercent
 	if storedMinimum.Valid {
-		e.Min7DPercent, err = service.ParseResetVoteMin7DPercent(storedMinimum.String)
-		if err != nil {
-			return nil, err
+		minimum, parseErr := service.ParseResetVoteMin7DPercent(storedMinimum.String)
+		if parseErr != nil {
+			// A malformed stored setting uses the strictest minimum for new
+			// spends while allowing already-dispatched requests to settle.
+			minimum = 100
 		}
+		e.Min7DPercent = minimum
 	}
 	rows, err := q.QueryContext(ctx, `SELECT DISTINCT ON(s.user_id) s.user_id,s.id,s.starts_at FROM user_subscriptions s
  JOIN users u ON u.id=s.user_id WHERE s.group_id IN (`+carpoolAccountSubscriptionGroups+`)

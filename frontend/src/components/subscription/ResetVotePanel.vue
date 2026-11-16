@@ -65,7 +65,7 @@
         </span>
       </div>
     </div>
-    <p v-if="!expired && view?.blocked_reason" class="break-words text-xs text-gray-500 dark:text-gray-400" role="status">{{ safeReason(view.blocked_reason) }}</p>
+    <p v-if="!expired && view?.blocked_reason" class="break-words text-xs text-gray-500 dark:text-gray-400" role="status">{{ safeReason(view.blocked_reason, minimumUsage) }}</p>
     <p v-else-if="!expired && hasCredits && belowMinimum && (!proposal || terminalStates.includes(proposal.status)) && proposal?.reason !== 'usage_below_minimum'" class="break-words text-xs text-gray-500 dark:text-gray-400" role="status">{{ t('userSubscriptions.resetVote.minimumUsage', { percent: minimumUsage }) }}</p>
     <p v-if="!expired && pendingRequestId" class="break-words text-xs text-amber-700 dark:text-amber-300" role="status">{{ t('userSubscriptions.resetVote.pendingRequest') }}</p>
     <p v-if="loadFailed" class="break-words text-xs text-amber-700 dark:text-amber-300" role="status">{{ t('userSubscriptions.resetVote.loadFailed') }}</p>
@@ -161,9 +161,9 @@ const statusText = computed(() => {
   return t(`userSubscriptions.resetVote.states.${status === 'voting' && deadline.value <= now.value ? 'expired' : status}`)
 })
 
-function safeReason(reason: string | null): string {
-  if (reason === 'usage_below_minimum' && minimumUsage.value !== null) {
-    return t('userSubscriptions.resetVote.minimumUsage', { percent: minimumUsage.value })
+function safeReason(reason: string | null, minimum: number | null = null): string {
+  if (reason === 'usage_below_minimum' && minimum !== null) {
+    return t('userSubscriptions.resetVote.minimumUsage', { percent: minimum })
   }
   return reason ? t(`userSubscriptions.resetVote.reasons.${reasonCodes.has(reason) ? reason : 'unavailable'}`) : ''
 }

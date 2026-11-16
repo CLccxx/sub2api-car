@@ -368,6 +368,12 @@ func TestCarpoolVotePostgresDispatchedUncertaintyDoesNotExpire(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "awaiting_confirmation", v.Proposal.Status)
 	require.False(t, v.CanCreate)
+
+	_, err = db.Exec(`UPDATE accounts SET extra='{"reset_vote_min_7d_percent":0}' WHERE id=9`)
+	require.NoError(t, err)
+	ok, err = r.Dispatch(ctx, p.ID, nil)
+	require.NoError(t, err)
+	require.True(t, ok, "an invalid stored minimum must not interrupt confirmation of an already dispatched request")
 }
 
 func TestCarpoolVotePostgresExpiredBeforeDispatchReleasesIntent(t *testing.T) {

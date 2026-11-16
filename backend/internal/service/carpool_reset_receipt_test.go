@@ -74,6 +74,9 @@ func TestCarpoolResetSuccessfulConsumeReceipt(t *testing.T) {
 				require.Equal(t, 2, recorder.windows)
 			} else {
 				require.Zero(t, recorder.calls)
+				if scenario == "reset without windows" {
+					require.Equal(t, "ok", result.Code, "an acknowledged reset with no window count still has an uncertain outcome")
+				}
 			}
 		})
 	}

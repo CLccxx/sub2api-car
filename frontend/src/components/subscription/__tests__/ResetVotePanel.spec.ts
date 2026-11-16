@@ -100,6 +100,19 @@ describe('ResetVotePanel', () => {
     expect(wrapper.find('[data-test="reset-vote-create"]').exists()).toBe(true)
   })
 
+  it('keeps the historical vote failure separate from the current minimum', async () => {
+    getResetVote.mockResolvedValue({
+      ...voting({ status: 'failed', reason: 'usage_below_minimum' }),
+      min_7d_used_percent: 50,
+      can_create: true
+    })
+    const wrapper = open({ sevenDayUsedPercent: 82 })
+    await flushPromises()
+    expect(wrapper.text()).toContain('userSubscriptions.resetVote.reasons.usage_below_minimum')
+    expect(wrapper.text()).not.toContain('userSubscriptions.resetVote.minimumUsage')
+    expect(wrapper.find('[data-test="reset-vote-create"]').exists()).toBe(true)
+  })
+
   it('requires confirmation of unanimous approval and counts the initiator once', async () => {
     const wrapper = open()
     await showConfirmation(wrapper)

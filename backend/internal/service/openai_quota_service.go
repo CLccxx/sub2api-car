@@ -493,9 +493,9 @@ func (s *OpenAIQuotaService) resetCreditRaw(ctx context.Context, accountID int64
 		"code", payload.Code,
 		"windows_reset", payload.WindowsReset,
 	)
-	// Normalize the upstream success alias at the boundary so manual, automatic,
-	// and vote resets agree on the result stored by the coordinator.
-	if payload.Code == "reset" && payload.WindowsReset > 0 {
+	// The coordinator still requires a positive window count for success.
+	// An acknowledgment without that count is uncertain regardless of alias.
+	if payload.Code == "reset" {
 		payload.Code = "ok"
 	}
 	if payload.Code == "ok" && payload.WindowsReset > 0 && s.resetReceiptRecorder != nil {
