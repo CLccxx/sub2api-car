@@ -4,11 +4,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { AdminGroup } from '@/types'
 import GroupsView from '@/views/admin/GroupsView.vue'
+import CarpoolSettings from '@/components/admin/group/CarpoolSettings.vue'
+import Select from '@/components/common/Select.vue'
 import { adminAPI } from '@/api/admin'
 
 const {
   listGroups,
   duplicateGroup,
+  createGroup,
   updateGroup,
   getModelAllowlistCandidates,
   getUsageSummary,
@@ -19,6 +22,7 @@ const {
 } = vi.hoisted(() => ({
   listGroups: vi.fn(),
   duplicateGroup: vi.fn(),
+  createGroup: vi.fn(),
   updateGroup: vi.fn(),
   getModelAllowlistCandidates: vi.fn(),
   getUsageSummary: vi.fn(),
@@ -40,7 +44,7 @@ vi.mock('@/api/admin', () => ({
       getCapacitySummary,
       getLiveCapability,
       getAll: vi.fn(),
-      create: vi.fn(),
+      create: createGroup,
       update: updateGroup,
       delete: vi.fn(),
       updateSortOrder: vi.fn()
@@ -175,7 +179,57 @@ function mountView() {
   })
 }
 
-describe('GroupsView duplicate action', () => {
+const carpoolGroup: AdminGroup = {
+  ...sourceGroup,
+  name: '4 人车分组',
+  description: '4 人均分额度',
+  subscription_type: 'subscription',
+  carpool_members: 4,
+  carpool_bonus_usd: 100,
+  weekly_limit_usd: 325.29,
+  carpool_quota_synced_at: '2026-11-17T08:30:00Z'
+}
+
+const bonusSelector = '[aria-label="admin.groups.carpool.bonus"]'
+const membersSelector = '[aria-label="admin.groups.carpool.members"]'
+
+type ViewWrapper = ReturnType<typeof mountView>
+
+function groupList(group: AdminGroup) {
+  return { items: [group], total: 1, page: 1, page_size: 20, pages: 1 }
+}
+
+async function openEdit(wrapper: ViewWrapper) {
+  await wrapper.findAll('button').find(button => button.text() === 'common.edit')!.trigger('click')
+  await flushPromises()
+}
+
+async function openCarpoolCreate(wrapper: ViewWrapper) {
+  await wrapper.get('[data-tour="groups-create-btn"]').trigger('click')
+  const selects = wrapper.findAllComponents(Select)
+  selects.find(select => select.attributes('data-tour') === 'group-form-platform')!.vm.$emit('update:modelValue', 'openai')
+  selects.find(select => select.props('modelValue') === 'standard')!.vm.$emit('update:modelValue', 'subscription')
+  await flushPromises()
+  await wrapper.get('[data-testid="carpool-settings"] [role=switch]').trigger('click')
+}
+
+function weeklyLimitInput(wrapper: ViewWrapper, mode: 'create' | 'edit' = 'edit') {
+  // The carpool weekly limit is the only read-only numeric input in either form.
+  return wrapper.get<HTMLInputElement>(`#${mode}-group-form input[type="number"][readonly]`)
+}
+
+async function cancelModal(wrapper: ViewWrapper) {
+  await wrapper.findAll('button').find(button => button.text() === 'common.cancel')!.trigger('click')
+  await flushPromises()
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(done => { resolve = done })
+  return { promise, resolve }
+}
+
+describe('GroupsView duplicate action and group form', () => {
   beforeEach(() => {
     authState.isSimpleMode = false
     localStorage.clear()
@@ -183,6 +237,7 @@ describe('GroupsView duplicate action', () => {
     for (const fn of [
       listGroups,
       duplicateGroup,
+      createGroup,
       updateGroup,
       getModelAllowlistCandidates,
       getUsageSummary,
@@ -207,6 +262,8 @@ describe('GroupsView duplicate action', () => {
       name: 'Primary (Copy)',
       status: 'inactive'
     })
+    createGroup.mockResolvedValue(sourceGroup)
+    updateGroup.mockResolvedValue(sourceGroup)
     getModelAllowlistCandidates.mockResolvedValue([])
     getUsageSummary.mockResolvedValue([])
     getCapacitySummary.mockResolvedValue([])
@@ -322,6 +379,241 @@ describe('GroupsView duplicate action', () => {
 
     expect(updateGroup).toHaveBeenCalledTimes(1)
     expect(showError).toHaveBeenCalledWith('group name already exists')
+    wrapper.unmount()
+  })
+
+  it.each([undefined, 0, 150.29])('hydrates saved carpool bonus %s without overwriting the real cap', async (bonus) => {
+    const group = { ...carpoolGroup, carpool_bonus_usd: bonus }
+    listGroups.mockResolvedValue(groupList(group))
+    const wrapper = mountView()
+    await flushPromises()
+    await openEdit(wrapper)
+
+    expect(wrapper.get<HTMLInputElement>(bonusSelector).element.value).toBe(String(bonus ?? 100))
+    expect(weeklyLimitInput(wrapper).element.value).toBe('325.29')
+    expect(wrapper.getComponent(CarpoolSettings).emitted('update:bonus')).toBeUndefined()
+    expect(wrapper.getComponent(CarpoolSettings).emitted('update:members')).toBeUndefined()
+    expect(updateGroup).not.toHaveBeenCalled()
+    expect(group.carpool_quota_synced_at).toBe(carpoolGroup.carpool_quota_synced_at)
+    wrapper.unmount()
+  })
+
+  it.each([null, 0])('does not bootstrap saved cap %s just by opening the edit modal', async (limit) => {
+    listGroups.mockResolvedValue(groupList({ ...carpoolGroup, weekly_limit_usd: limit }))
+    const wrapper = mountView()
+    await flushPromises()
+    await openEdit(wrapper)
+    expect(weeklyLimitInput(wrapper).element.value).toBe(limit === null ? '' : '0')
+    wrapper.unmount()
+  })
+
+  it('previews cent deltas locally, preserves count-change semantics, and discards cancelled edits', async () => {
+    const group = { ...carpoolGroup }
+    listGroups.mockResolvedValue(groupList(group))
+    const wrapper = mountView()
+    await flushPromises()
+    await openEdit(wrapper)
+    const bonus = wrapper.get<HTMLInputElement>(bonusSelector)
+    const syncText = wrapper.get('[data-testid="carpool-settings"] dl').text()
+
+    await bonus.setValue('150.29')
+    expect(weeklyLimitInput(wrapper).element.value).toBe('375.58')
+    await bonus.trigger('input')
+    expect(weeklyLimitInput(wrapper).element.value).toBe('375.58')
+    await wrapper.get(membersSelector).setValue('3')
+    expect(weeklyLimitInput(wrapper).element.value).toBe('375.58')
+    await bonus.setValue('0')
+    expect(weeklyLimitInput(wrapper).element.value).toBe('225.29')
+    await bonus.setValue('100')
+    expect(weeklyLimitInput(wrapper).element.value).toBe('325.29')
+    await bonus.setValue('150.29')
+    expect(wrapper.get('[data-testid="carpool-settings"] dl').text()).toBe(syncText)
+    expect(group).toEqual(carpoolGroup)
+    expect(updateGroup).not.toHaveBeenCalled()
+
+    await cancelModal(wrapper)
+    expect(listGroups).toHaveBeenCalledTimes(1)
+    await openEdit(wrapper)
+    expect(wrapper.get<HTMLInputElement>(bonusSelector).element.value).toBe('100')
+    expect(wrapper.get<HTMLInputElement>(membersSelector).element.value).toBe('4')
+    expect(weeklyLimitInput(wrapper).element.value).toBe('325.29')
+    wrapper.unmount()
+  })
+
+  it.each([0, 100, 150.29])('submits bonus %s in create payload and resets it for the next create', async (bonus) => {
+    const wrapper = mountView()
+    await flushPromises()
+    await openCarpoolCreate(wrapper)
+    expect(wrapper.get<HTMLInputElement>(bonusSelector).element.value).toBe('100')
+    expect(weeklyLimitInput(wrapper, 'create').element.value).toBe('500')
+    await wrapper.get(bonusSelector).setValue(String(bonus))
+    expect(weeklyLimitInput(wrapper, 'create').element.value).toBe(String((40000 + Math.round(bonus * 100)) / 100))
+    await wrapper.get('#create-group-form').trigger('submit')
+    await flushPromises()
+
+    expect(createGroup).toHaveBeenCalledWith(expect.objectContaining({
+      carpool_members: 4,
+      carpool_bonus_usd: bonus,
+      weekly_limit_usd: (40000 + Math.round(bonus * 100)) / 100,
+      daily_limit_usd: null,
+      monthly_limit_usd: null
+    }))
+    expect(listGroups).toHaveBeenCalledTimes(2)
+    expect(showSuccess).toHaveBeenCalledWith('admin.groups.groupCreated')
+    await openCarpoolCreate(wrapper)
+    expect(wrapper.get<HTMLInputElement>(bonusSelector).element.value).toBe('100')
+    expect(weeklyLimitInput(wrapper, 'create').element.value).toBe('500')
+    wrapper.unmount()
+  })
+
+  it.each([0, 100, 150.29])('submits bonus %s and its preview in update payload', async (bonus) => {
+    listGroups.mockResolvedValue(groupList(carpoolGroup))
+    const wrapper = mountView()
+    await flushPromises()
+    await openEdit(wrapper)
+    await wrapper.get(bonusSelector).setValue(String(bonus))
+    await wrapper.get('#edit-group-form').trigger('submit')
+    await flushPromises()
+    expect(updateGroup).toHaveBeenCalledWith(42, expect.objectContaining({
+      carpool_members: 4,
+      carpool_bonus_usd: bonus,
+      weekly_limit_usd: (22529 + Math.round(bonus * 100)) / 100
+    }))
+    expect(updateGroup.mock.calls[0][1]).not.toHaveProperty('carpool_quota_synced_at')
+    expect(listGroups).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('preserves saved zero as the preview baseline and resets a cancelled create', async () => {
+    listGroups.mockResolvedValue(groupList({ ...carpoolGroup, carpool_bonus_usd: 0 }))
+    const wrapper = mountView()
+    await flushPromises()
+    await openEdit(wrapper)
+    await wrapper.get(bonusSelector).setValue('0.29')
+    expect(weeklyLimitInput(wrapper).element.value).toBe('325.58')
+    await cancelModal(wrapper)
+    await openCarpoolCreate(wrapper)
+    await wrapper.get(bonusSelector).setValue('0')
+    await cancelModal(wrapper)
+    await openCarpoolCreate(wrapper)
+    expect(wrapper.get<HTMLInputElement>(bonusSelector).element.value).toBe('100')
+    expect(weeklyLimitInput(wrapper, 'create').element.value).toBe('500')
+    expect(createGroup).not.toHaveBeenCalled()
+    expect(updateGroup).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  describe.each(['create', 'edit'] as const)('%s carpool validation and save', (mode) => {
+    it.each(['', '-1', 'NaN', 'Infinity', '100.001', '10000000000.01'])('blocks invalid bonus %s instead of submitting the last legal amount', async (invalid) => {
+      listGroups.mockResolvedValue(groupList(carpoolGroup))
+      const wrapper = mountView()
+      await flushPromises()
+      if (mode === 'create') await openCarpoolCreate(wrapper)
+      else await openEdit(wrapper)
+      const originalCap = weeklyLimitInput(wrapper, mode).element.value
+      await wrapper.get(bonusSelector).setValue(invalid)
+      await wrapper.get(`#${mode}-group-form`).trigger('submit')
+      await flushPromises()
+      expect(createGroup).not.toHaveBeenCalled()
+      expect(updateGroup).not.toHaveBeenCalled()
+      expect(showError).toHaveBeenCalledWith('admin.groups.carpool.bonusInvalid')
+      expect(weeklyLimitInput(wrapper, mode).element.value).toBe(originalCap)
+      await wrapper.get(bonusSelector).setValue('0')
+      await wrapper.get(`#${mode}-group-form`).trigger('submit')
+      await flushPromises()
+      const payload = mode === 'create' ? createGroup.mock.calls[0][0] : updateGroup.mock.calls[0][1]
+      expect(payload.carpool_bonus_usd).toBe(0)
+      wrapper.unmount()
+    })
+
+    it('keeps saving until the authoritative list refresh completes', async () => {
+      const refreshed = { ...carpoolGroup, carpool_bonus_usd: 150.29, weekly_limit_usd: 475.58 }
+      const refresh = deferred<ReturnType<typeof groupList>>()
+      listGroups.mockResolvedValueOnce(groupList(carpoolGroup)).mockReturnValueOnce(refresh.promise)
+      // The save response may differ from the next cron-adjusted list response.
+      createGroup.mockResolvedValue({ ...refreshed, weekly_limit_usd: 450 })
+      updateGroup.mockResolvedValue({ ...refreshed, weekly_limit_usd: 450 })
+      const wrapper = mountView()
+      await flushPromises()
+      if (mode === 'create') await openCarpoolCreate(wrapper)
+      else await openEdit(wrapper)
+      await wrapper.get(bonusSelector).setValue('150.29')
+      await wrapper.get(`#${mode}-group-form`).trigger('submit')
+      await flushPromises()
+      expect(listGroups).toHaveBeenCalledTimes(2)
+
+      // Opening another dialog cannot submit again while the refresh is in flight.
+      await wrapper.get('[data-tour="groups-create-btn"]').trigger('click')
+      expect(wrapper.get('[form="create-group-form"]').attributes('disabled')).toBeDefined()
+      await wrapper.get('#create-group-form').trigger('submit')
+      expect(createGroup).toHaveBeenCalledTimes(mode === 'create' ? 1 : 0)
+      expect(updateGroup).toHaveBeenCalledTimes(mode === 'edit' ? 1 : 0)
+      refresh.resolve(groupList(refreshed))
+      await flushPromises()
+      expect(wrapper.get('[form="create-group-form"]').attributes('disabled')).toBeUndefined()
+      expect(wrapper.getComponent(DataTableStub).props('data')).toEqual([refreshed])
+      await cancelModal(wrapper)
+      await openEdit(wrapper)
+      expect(wrapper.get<HTMLInputElement>(bonusSelector).element.value).toBe('150.29')
+      expect(weeklyLimitInput(wrapper).element.value).toBe('475.58')
+      wrapper.unmount()
+    })
+
+    it('does not expose or submit carpool configuration in simple mode', async () => {
+      authState.isSimpleMode = true
+      listGroups.mockResolvedValue(groupList(carpoolGroup))
+      const wrapper = mountView()
+      await flushPromises()
+      if (mode === 'create') {
+        await wrapper.get('[data-tour="groups-create-btn"]').trigger('click')
+        await wrapper.get('#create-group-form input[type="text"]').setValue('Simple group')
+      } else {
+        await openEdit(wrapper)
+      }
+      expect(wrapper.findComponent(CarpoolSettings).exists()).toBe(false)
+      await wrapper.get(`#${mode}-group-form`).trigger('submit')
+      await flushPromises()
+      const payload = mode === 'create' ? createGroup.mock.calls[0][0] : updateGroup.mock.calls[0][1]
+      expect(Object.keys(payload).sort()).toEqual(mode === 'create'
+        ? ['description', 'i18n', 'name', 'platform']
+        : ['description', 'i18n', 'name'])
+      expect(payload).not.toHaveProperty('carpool_bonus_usd')
+      expect(payload).not.toHaveProperty('carpool_members')
+      expect(payload).not.toHaveProperty('weekly_limit_usd')
+      wrapper.unmount()
+    })
+  })
+
+  it('keeps the bonus preview after a save error and retries without adding it again', async () => {
+    listGroups.mockResolvedValue(groupList(carpoolGroup))
+    updateGroup.mockRejectedValueOnce(new Error('quota changed, retry'))
+    const wrapper = mountView()
+    await flushPromises()
+    await openEdit(wrapper)
+    await wrapper.get(bonusSelector).setValue('150.29')
+    await wrapper.get('#edit-group-form').trigger('submit')
+    await flushPromises()
+    expect(showError).toHaveBeenCalledWith('quota changed, retry')
+    expect(listGroups).toHaveBeenCalledTimes(1)
+    expect(weeklyLimitInput(wrapper).element.value).toBe('375.58')
+    await wrapper.get('#edit-group-form').trigger('submit')
+    await flushPromises()
+    expect(updateGroup.mock.calls[1][1]).toEqual(updateGroup.mock.calls[0][1])
+    expect(listGroups).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('reports refresh errors separately after a successful bonus update', async () => {
+    listGroups.mockResolvedValueOnce(groupList(carpoolGroup)).mockRejectedValueOnce(new Error('refresh failed'))
+    const wrapper = mountView()
+    await flushPromises()
+    await openEdit(wrapper)
+    await wrapper.get(bonusSelector).setValue('150.29')
+    await wrapper.get('#edit-group-form').trigger('submit')
+    await flushPromises()
+    expect(showSuccess).toHaveBeenCalledWith('admin.groups.groupUpdated')
+    expect(showError).toHaveBeenCalledWith('admin.groups.failedToLoad')
+    expect(showError).not.toHaveBeenCalledWith('admin.groups.failedToUpdate')
     wrapper.unmount()
   })
 

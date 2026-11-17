@@ -45,6 +45,19 @@ func TestCarpoolPostgres(t *testing.T) {
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx, string(migration))
 	require.NoError(t, err, "migration is idempotent")
+	_, err = db.ExecContext(ctx, `INSERT INTO groups (id,status,platform,subscription_type,carpool_members,weekly_limit_usd)
+		VALUES (99,'inactive','openai','subscription',4,777.77)`)
+	require.NoError(t, err)
+	bonusMigration, err := migrations.FS.ReadFile("251_custom_group_carpool_bonus.sql")
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, string(bonusMigration))
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, string(bonusMigration))
+	require.NoError(t, err, "bonus migration is idempotent")
+	var historicalBonus, historicalLimit float64
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT carpool_bonus_usd, weekly_limit_usd FROM groups WHERE id=99`).Scan(&historicalBonus, &historicalLimit))
+	require.Equal(t, 100.0, historicalBonus)
+	require.Equal(t, 777.77, historicalLimit, "migration must not recalculate existing caps")
 	_, err = db.ExecContext(ctx, `
 		INSERT INTO groups (id,status,platform,subscription_type,carpool_members,weekly_limit_usd) VALUES (10,'active','openai','subscription',4,400);
 		INSERT INTO accounts (id,platform,type,status,credentials) VALUES (9,'openai','oauth','active','{}');
@@ -58,6 +71,7 @@ func TestCarpoolPostgres(t *testing.T) {
 	targets, err := repo.ListPending(ctx, slot)
 	require.NoError(t, err)
 	require.Len(t, targets, 1)
+	require.Equal(t, 100.0, targets[0].BonusUSD, "existing configurations retain the historical bonus")
 	account := &service.Account{ID: 9, Credentials: map[string]any{}}
 	ok, err := repo.Apply(ctx, targets[0], account, 325, slot)
 	require.NoError(t, err)
@@ -94,4 +108,16 @@ func TestCarpoolPostgres(t *testing.T) {
 	ok, err = repo.Apply(ctx, targets[0], account, 400, slot)
 	require.NoError(t, err)
 	require.False(t, ok, "editing the size invalidates an in-flight estimate")
+	targets, err = repo.ListPending(ctx, slot)
+	require.NoError(t, err)
+	require.Len(t, targets, 1)
+	_, err = db.ExecContext(ctx, `UPDATE groups SET carpool_bonus_usd=150 WHERE id=10`)
+	require.NoError(t, err)
+	ok, err = repo.Apply(ctx, targets[0], account, 400, slot)
+	require.NoError(t, err)
+	require.False(t, ok, "a changed bonus invalidates a stale estimate even with the same timestamp")
+	for _, invalid := range []string{"-1", "0.001", "10000000000.01", "NaN", "Infinity"} {
+		_, err = db.ExecContext(ctx, `UPDATE groups SET carpool_bonus_usd=$1 WHERE id=10`, invalid)
+		require.Error(t, err, "invalid bonus %s must be rejected by the database", invalid)
+	}
 }

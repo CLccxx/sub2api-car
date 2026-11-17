@@ -172,6 +172,7 @@ type Group struct {
 type AdminGroup struct {
 	Group
 	CarpoolMembers       int        `json:"carpool_members"`
+	CarpoolBonusUSD      float64    `json:"carpool_bonus_usd"`
 	CarpoolQuotaSyncedAt *time.Time `json:"carpool_quota_synced_at"`
 	// ForceOpenAIFast 是管理端请求策略，用户侧分组 DTO 无需暴露。
 	ForceOpenAIFast bool `json:"force_openai_fast"`

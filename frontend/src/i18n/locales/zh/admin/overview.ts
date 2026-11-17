@@ -1073,6 +1073,9 @@ export default {
       carpool: {
         enabled: '拼车额度',
         members: '拼车人数',
+        bonus: '每人追加额度（USD）',
+        bonusHint: '保存后立即更新周额度，仍按北京时间每 30 分钟（每小时 00 分、30 分）自动刷新。',
+        bonusInvalid: '请输入 0 至 10,000,000,000 USD 的金额，最多保留两位小数。',
         schedule: '额度更新时间',
         scheduleValue: '北京时间每 30 分钟（每小时 00 分、30 分）',
         lastUpdated: '最近同步'

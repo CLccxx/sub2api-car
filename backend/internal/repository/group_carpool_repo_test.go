@@ -18,14 +18,14 @@ func TestCarpoolRepositoryApply(t *testing.T) {
 			defer func() { _ = db.Close() }()
 			repo := NewCarpoolQuotaRepository(db)
 			slot := time.Date(2026, 10, 8, 4, 0, 0, 0, time.UTC)
-			target := service.CarpoolQuotaTarget{GroupID: 10, Members: 4, Revision: slot.Add(-time.Hour)}
+			target := service.CarpoolQuotaTarget{GroupID: 10, Members: 4, BonusUSD: 100, Revision: slot.Add(-time.Hour)}
 			mock.ExpectBegin()
 			rows := sqlmock.NewRows([]string{"id"})
 			if scenario != "group changed" {
 				rows.AddRow(10)
 			}
 			mock.ExpectQuery(`(?s)SELECT id FROM groups.*carpool_members.*updated_at.*carpool_quota_synced_at.*FOR UPDATE`).
-				WithArgs(target.GroupID, target.Members, target.Revision, slot).WillReturnRows(rows)
+				WithArgs(target.GroupID, target.Members, target.Revision, slot, target.BonusUSD).WillReturnRows(rows)
 			if scenario != "group changed" {
 				accounts := sqlmock.NewRows([]string{"id", "eligible"}).AddRow(9, scenario != "account changed")
 				if scenario == "extra account" {

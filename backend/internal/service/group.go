@@ -37,7 +37,14 @@ type Group struct {
 
 	SubscriptionType     string
 	CarpoolMembers       int
+	CarpoolBonusUSD      float64
 	CarpoolQuotaSyncedAt *time.Time
+	// PreviousCarpoolBonusUSD is an explicit bonus update guard; nil leaves persisted config unchanged.
+	PreviousCarpoolBonusUSD *float64
+	// PreviousCarpoolConfig guards concurrent mode changes without rejecting scheduled cap refreshes.
+	PreviousCarpoolConfig *CarpoolConfig
+	// AdjustCarpoolBonus is internal: apply the change to the current DB cap, without usage or schedule changes.
+	AdjustCarpoolBonus bool
 	// Preserve a concurrently refreshed cap when editing unrelated group fields.
 	PreserveCarpoolWeeklyLimit bool
 	DailyLimitUSD              *float64

@@ -14,7 +14,7 @@ import (
 func TestCarpoolGroupEnable(t *testing.T) {
 	daily, monthly := 20.0, 800.0
 	repo := &groupPlatformRepoStub{group: &Group{ID: 7, Name: "old", Platform: PlatformOpenAI,
-		SubscriptionType: SubscriptionTypeSubscription, DailyLimitUSD: &daily, MonthlyLimitUSD: &monthly}}
+		SubscriptionType: SubscriptionTypeSubscription, CarpoolBonusUSD: DefaultCarpoolBonusUSD, DailyLimitUSD: &daily, MonthlyLimitUSD: &monthly}}
 	svc := &adminServiceImpl{groupRepo: repo}
 	var input UpdateGroupInput
 	require.NoError(t, json.Unmarshal([]byte(`{"CarpoolMembers":4}`), &input))
@@ -65,7 +65,7 @@ func TestCarpoolGroupPreservesExistingCapWhenSizeChanges(t *testing.T) {
 func TestCarpoolGroupZeroCapAndDisable(t *testing.T) {
 	zero := 0.0
 	repo := &groupPlatformRepoStub{group: &Group{ID: 7, Name: "old", Platform: PlatformOpenAI,
-		SubscriptionType: SubscriptionTypeSubscription, CarpoolMembers: 4, WeeklyLimitUSD: &zero}}
+		SubscriptionType: SubscriptionTypeSubscription, CarpoolMembers: 4, CarpoolBonusUSD: DefaultCarpoolBonusUSD, WeeklyLimitUSD: &zero}}
 	svc := &adminServiceImpl{groupRepo: repo}
 	got, err := svc.UpdateGroup(context.Background(), 7, &UpdateGroupInput{})
 	require.NoError(t, err)
@@ -76,7 +76,7 @@ func TestCarpoolGroupZeroCapAndDisable(t *testing.T) {
 	got, err = svc.UpdateGroup(context.Background(), 7, &UpdateGroupInput{CarpoolMembers: &off})
 	require.NoError(t, err)
 	require.Zero(t, got.CarpoolMembers)
-	require.False(t, got.PreserveCarpoolWeeklyLimit)
+	require.True(t, got.PreserveCarpoolWeeklyLimit)
 	require.Equal(t, 325.0, *got.WeeklyLimitUSD)
 }
 
@@ -101,7 +101,7 @@ func TestCarpoolGroupCreate(t *testing.T) {
 				require.NotNil(t, got.WeeklyLimitUSD)
 				if supplied == nil || *supplied <= 0 {
 					require.Equal(t, test.defaultLimit, *got.WeeklyLimitUSD)
-					refreshed, ok := carpoolWeeklyLimit(1600, test.members)
+					refreshed, ok := carpoolWeeklyLimit(1600, test.members, DefaultCarpoolBonusUSD)
 					require.True(t, ok)
 					require.Equal(t, refreshed, *got.WeeklyLimitUSD, "bootstrap and refresh must use the same quota formula")
 				} else {

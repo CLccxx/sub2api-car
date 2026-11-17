@@ -135,6 +135,11 @@ func CarpoolMembers(v int) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldCarpoolMembers, v))
 }
 
+// CarpoolBonusUsd applies equality check predicate on the "carpool_bonus_usd" field. It's identical to CarpoolBonusUsdEQ.
+func CarpoolBonusUsd(v float64) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldCarpoolBonusUsd, v))
+}
+
 // CarpoolQuotaSyncedAt applies equality check predicate on the "carpool_quota_synced_at" field. It's identical to CarpoolQuotaSyncedAtEQ.
 func CarpoolQuotaSyncedAt(v time.Time) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldCarpoolQuotaSyncedAt, v))
@@ -1168,6 +1173,46 @@ func CarpoolMembersLT(v int) predicate.Group {
 // CarpoolMembersLTE applies the LTE predicate on the "carpool_members" field.
 func CarpoolMembersLTE(v int) predicate.Group {
 	return predicate.Group(sql.FieldLTE(FieldCarpoolMembers, v))
+}
+
+// CarpoolBonusUsdEQ applies the EQ predicate on the "carpool_bonus_usd" field.
+func CarpoolBonusUsdEQ(v float64) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldCarpoolBonusUsd, v))
+}
+
+// CarpoolBonusUsdNEQ applies the NEQ predicate on the "carpool_bonus_usd" field.
+func CarpoolBonusUsdNEQ(v float64) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldCarpoolBonusUsd, v))
+}
+
+// CarpoolBonusUsdIn applies the In predicate on the "carpool_bonus_usd" field.
+func CarpoolBonusUsdIn(vs ...float64) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldCarpoolBonusUsd, vs...))
+}
+
+// CarpoolBonusUsdNotIn applies the NotIn predicate on the "carpool_bonus_usd" field.
+func CarpoolBonusUsdNotIn(vs ...float64) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldCarpoolBonusUsd, vs...))
+}
+
+// CarpoolBonusUsdGT applies the GT predicate on the "carpool_bonus_usd" field.
+func CarpoolBonusUsdGT(v float64) predicate.Group {
+	return predicate.Group(sql.FieldGT(FieldCarpoolBonusUsd, v))
+}
+
+// CarpoolBonusUsdGTE applies the GTE predicate on the "carpool_bonus_usd" field.
+func CarpoolBonusUsdGTE(v float64) predicate.Group {
+	return predicate.Group(sql.FieldGTE(FieldCarpoolBonusUsd, v))
+}
+
+// CarpoolBonusUsdLT applies the LT predicate on the "carpool_bonus_usd" field.
+func CarpoolBonusUsdLT(v float64) predicate.Group {
+	return predicate.Group(sql.FieldLT(FieldCarpoolBonusUsd, v))
+}
+
+// CarpoolBonusUsdLTE applies the LTE predicate on the "carpool_bonus_usd" field.
+func CarpoolBonusUsdLTE(v float64) predicate.Group {
+	return predicate.Group(sql.FieldLTE(FieldCarpoolBonusUsd, v))
 }
 
 // CarpoolQuotaSyncedAtEQ applies the EQ predicate on the "carpool_quota_synced_at" field.

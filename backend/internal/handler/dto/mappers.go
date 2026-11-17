@@ -149,6 +149,7 @@ func GroupFromServiceAdmin(g *service.Group) *AdminGroup {
 	out := &AdminGroup{
 		Group:                       groupFromServiceBase(g),
 		CarpoolMembers:              g.CarpoolMembers,
+		CarpoolBonusUSD:             g.CarpoolBonusUSD,
 		CarpoolQuotaSyncedAt:        g.CarpoolQuotaSyncedAt,
 		ForceOpenAIFast:             g.ForceOpenAIFast,
 		FreeOpenAIFast:              g.FreeOpenAIFast,

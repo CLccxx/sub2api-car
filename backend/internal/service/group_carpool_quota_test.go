@@ -34,7 +34,7 @@ func TestCarpoolWeeklyLimit(t *testing.T) {
 		{1000, -1, 0, false}, {1000, 0, 0, false}, {1000, 1, 0, false}, {1000, 6, 0, false},
 	} {
 		t.Run(fmt.Sprintf("estimate %g members %d", test.estimate, test.members), func(t *testing.T) {
-			got, ok := carpoolWeeklyLimit(test.estimate, test.members)
+			got, ok := carpoolWeeklyLimit(test.estimate, test.members, DefaultCarpoolBonusUSD)
 			require.Equal(t, test.ok, ok)
 			require.Equal(t, test.expected, got)
 		})
@@ -49,12 +49,28 @@ func TestCarpoolWeeklyLimitAddsBonusWithoutMinimumFloor(t *testing.T) {
 		t.Run(fmt.Sprintf("%d members", test.members), func(t *testing.T) {
 			for _, estimate := range []float64{5.33, math.SmallestNonzeroFloat64, 10} {
 				t.Run(fmt.Sprintf("estimate %g", estimate), func(t *testing.T) {
-					limit, ok := carpoolWeeklyLimit(estimate, test.members)
+					limit, ok := carpoolWeeklyLimit(estimate, test.members, DefaultCarpoolBonusUSD)
 					require.True(t, ok)
 					require.Equal(t, test.expected, limit)
 				})
 			}
 		})
+	}
+}
+
+func TestCarpoolWeeklyLimitConfiguredBonus(t *testing.T) {
+	for _, test := range []struct {
+		bonus, want float64
+	}{{100, 283.33}, {150, 333.33}, {0, 183.33}, {0.29, 183.62}, {150.25, 333.58}, {1e10, 1e10 + 183.33}} {
+		t.Run(fmt.Sprint(test.bonus), func(t *testing.T) {
+			limit, ok := carpoolWeeklyLimit(550, 3, test.bonus)
+			require.True(t, ok)
+			require.Equal(t, test.want, limit)
+		})
+	}
+	for _, bonus := range []float64{-1, 0.001, 150.251, 1e10 + 0.01, math.NaN(), math.Inf(1), math.Inf(-1)} {
+		_, ok := carpoolWeeklyLimit(550, 3, bonus)
+		require.False(t, ok, "invalid bonus %v", bonus)
 	}
 }
 
@@ -113,7 +129,7 @@ func TestCarpoolQuotaRunSamplesEveryTenMinutesAndSyncsHalfHourly(t *testing.T) {
 			*now = observed.UTC()
 			quota.payload.FetchedAt = now.Unix()
 			quota.payload.RateLimit.SecondaryWindow.ResetAt = now.Add(48 * time.Hour).Unix()
-			repo := &carpoolRepoStub{targets: []CarpoolQuotaTarget{{GroupID: 10, Members: 4, Revision: *now}}, applied: true}
+			repo := &carpoolRepoStub{targets: []CarpoolQuotaTarget{{GroupID: 10, Members: 4, BonusUSD: DefaultCarpoolBonusUSD, Revision: *now}}, applied: true}
 			wantSlot := time.Date(2026, 10, 9, 23, test.slotMinute, 0, 0, loc)
 			var sampledIDs []int64
 			reader := carpoolQuotaReaderFunc(func(ctx context.Context, id int64) (*OpenAIQuotaUsage, error) {
@@ -169,7 +185,7 @@ func TestCarpoolQuotaRefresh(t *testing.T) {
 			stats := &carpoolStats{cost: 1374.65 / 4}
 			estimate := 1374.65
 			quota.payload.SubscriptionCost = &SubscriptionCostEstimate{EstimatedTotalCost: &estimate, EstimateSource: "dynamic"}
-			repo := &carpoolRepoStub{targets: []CarpoolQuotaTarget{{GroupID: 10, Members: 4, Revision: *now}}, applied: true}
+			repo := &carpoolRepoStub{targets: []CarpoolQuotaTarget{{GroupID: 10, Members: 4, BonusUSD: DefaultCarpoolBonusUSD, Revision: *now}}, applied: true}
 			cache := &carpoolCacheSpy{}
 			svc := NewCarpoolQuotaService(repo, accounts, quota, stats, cache)
 			svc.now = func() time.Time { return *now }
@@ -224,13 +240,29 @@ func TestCarpoolQuotaRefresh(t *testing.T) {
 	}
 }
 
+func TestCarpoolQuotaRefreshUsesConfiguredBonus(t *testing.T) {
+	for _, bonus := range []float64{0, 100, 150, 150.25} {
+		t.Run(fmt.Sprint(bonus), func(t *testing.T) {
+			_, _, accounts, quota, _, now := sharedUsageFixture(t)
+			estimate := 1374.65
+			quota.payload.SubscriptionCost = &SubscriptionCostEstimate{EstimatedTotalCost: &estimate, EstimateSource: "dynamic"}
+			repo := &carpoolRepoStub{targets: []CarpoolQuotaTarget{{GroupID: 10, Members: 4, BonusUSD: bonus, Revision: *now}}, applied: true}
+			svc := NewCarpoolQuotaService(repo, accounts, quota, nil, nil)
+			svc.now = func() time.Time { return *now }
+			svc.run(context.Background())
+			require.Equal(t, 1, repo.writes)
+			require.Equal(t, 345+bonus, repo.limit)
+		})
+	}
+}
+
 func TestCarpoolQuotaRefreshRoundedLimitPreservesAvailableQuota(t *testing.T) {
 	_, _, accounts, quota, _, now := sharedUsageFixture(t)
 	quota.payload.RateLimit.SecondaryWindow.UsedPercent = 99
 	stats := &carpoolStats{cost: 1000}
 	estimate := 1000.0 / 0.99
 	quota.payload.SubscriptionCost = &SubscriptionCostEstimate{EstimatedTotalCost: &estimate, EstimateSource: "dynamic"}
-	repo := &carpoolRepoStub{targets: []CarpoolQuotaTarget{{GroupID: 10, Members: 4, Revision: *now}}, applied: true}
+	repo := &carpoolRepoStub{targets: []CarpoolQuotaTarget{{GroupID: 10, Members: 4, BonusUSD: DefaultCarpoolBonusUSD, Revision: *now}}, applied: true}
 	svc := NewCarpoolQuotaService(repo, accounts, quota, stats, nil)
 	svc.now = func() time.Time { return *now }
 
@@ -251,7 +283,7 @@ func TestCarpoolQuotaRefreshReconnectedAccountUsesBonusWithoutMinimumFloor(t *te
 	stats := &carpoolStats{cost: 5.33 * 0.08}
 	estimate := 5.33
 	quota.payload.SubscriptionCost = &SubscriptionCostEstimate{EstimatedTotalCost: &estimate, EstimateSource: "dynamic"}
-	repo := &carpoolRepoStub{targets: []CarpoolQuotaTarget{{GroupID: 10, Members: 3, Revision: *now}}, applied: true}
+	repo := &carpoolRepoStub{targets: []CarpoolQuotaTarget{{GroupID: 10, Members: 3, BonusUSD: DefaultCarpoolBonusUSD, Revision: *now}}, applied: true}
 	cache := &carpoolCacheSpy{}
 	svc := NewCarpoolQuotaService(repo, accounts, quota, stats, cache)
 	svc.now = func() time.Time { return *now }
@@ -286,7 +318,7 @@ func TestCarpoolQuotaSamplesSharedAccountOncePerSlot(t *testing.T) {
 	rebound.Credentials = map[string]any{"chatgpt_account_id": "rebound"}
 	accounts.groups = map[int64][]Account{10: {first}, 11: {rebound}}
 	repo := &carpoolRepoStub{targets: []CarpoolQuotaTarget{
-		{GroupID: 10, Members: 4}, {GroupID: 11, Members: 5},
+		{GroupID: 10, Members: 4, BonusUSD: 100}, {GroupID: 11, Members: 5, BonusUSD: 150},
 	}}
 	svc := NewCarpoolQuotaService(repo, accounts, quota, stats, nil)
 	svc.now = func() time.Time { return *now }

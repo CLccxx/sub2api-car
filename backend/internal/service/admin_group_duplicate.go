@@ -112,6 +112,7 @@ func cloneGroupForDuplicate(source *Group, operationID string) *Group {
 		DuplicateOperationID:            operationID,
 		SubscriptionType:                source.SubscriptionType,
 		CarpoolMembers:                  source.CarpoolMembers,
+		CarpoolBonusUSD:                 source.CarpoolBonusUSD,
 		DailyLimitUSD:                   cloneGroupValuePointer(source.DailyLimitUSD),
 		WeeklyLimitUSD:                  cloneGroupValuePointer(source.WeeklyLimitUSD),
 		MonthlyLimitUSD:                 cloneGroupValuePointer(source.MonthlyLimitUSD),

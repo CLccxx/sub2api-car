@@ -18,7 +18,7 @@ func NewCarpoolQuotaRepository(db *sql.DB) service.CarpoolQuotaRepository {
 }
 
 func (r *carpoolQuotaRepository) ListPending(ctx context.Context, slot time.Time) ([]service.CarpoolQuotaTarget, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id, carpool_members, updated_at FROM groups
+	rows, err := r.db.QueryContext(ctx, `SELECT id, carpool_members, carpool_bonus_usd, updated_at FROM groups
 		WHERE deleted_at IS NULL AND status = 'active' AND platform = 'openai'
 		AND subscription_type = 'subscription' AND carpool_members BETWEEN 2 AND 5
 		AND (carpool_quota_synced_at IS NULL OR carpool_quota_synced_at < $1)
@@ -30,7 +30,7 @@ func (r *carpoolQuotaRepository) ListPending(ctx context.Context, slot time.Time
 	var targets []service.CarpoolQuotaTarget
 	for rows.Next() {
 		var target service.CarpoolQuotaTarget
-		if err := rows.Scan(&target.GroupID, &target.Members, &target.Revision); err != nil {
+		if err := rows.Scan(&target.GroupID, &target.Members, &target.BonusUSD, &target.Revision); err != nil {
 			return nil, err
 		}
 		targets = append(targets, target)
@@ -57,7 +57,8 @@ func (r *carpoolQuotaRepository) Apply(ctx context.Context, target service.Carpo
 		AND carpool_members = $2 AND updated_at = $3 AND deleted_at IS NULL
 		AND status = 'active' AND platform = 'openai' AND subscription_type = 'subscription'
 		AND (carpool_quota_synced_at IS NULL OR carpool_quota_synced_at < $4)
-		FOR UPDATE`, target.GroupID, target.Members, target.Revision, slot).Scan(&id)
+		AND carpool_bonus_usd = $5
+		FOR UPDATE`, target.GroupID, target.Members, target.Revision, slot, target.BonusUSD).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}

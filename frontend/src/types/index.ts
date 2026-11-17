@@ -641,6 +641,7 @@ export interface Group {
 
 export interface AdminGroup extends Group {
   carpool_members?: number
+  carpool_bonus_usd?: number
   carpool_quota_synced_at?: string | null
   // 管理端的 name / description 始终是原字段，各语言译文另放在 i18n 里
   i18n?: GroupI18n
@@ -809,6 +810,7 @@ export interface UpdateApiKeyRequest {
 
 export interface CreateGroupRequest {
   carpool_members?: number
+  carpool_bonus_usd?: number
   name: string
   description?: string | null
   i18n?: GroupI18n
@@ -877,6 +879,7 @@ export interface CreateGroupRequest {
 
 export interface UpdateGroupRequest {
   carpool_members?: number
+  carpool_bonus_usd?: number
   name?: string
   description?: string | null
   i18n?: GroupI18n

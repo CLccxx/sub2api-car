@@ -88,6 +88,11 @@ func (Group) Fields() []ent.Field {
 			MaxLen(20).
 			Default(domain.SubscriptionTypeStandard),
 		field.Int("carpool_members").Default(0),
+		field.Float("carpool_bonus_usd").
+			Default(100).
+			Min(0).
+			Max(10000000000).
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}),
 		field.Time("carpool_quota_synced_at").Optional().Nillable(),
 		field.Float("daily_limit_usd").
 			Optional().
