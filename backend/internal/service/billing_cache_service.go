@@ -41,12 +41,13 @@ var (
 
 // subscriptionCacheData 订阅缓存数据结构（内部使用）
 type subscriptionCacheData struct {
-	Status       string
-	ExpiresAt    time.Time
-	DailyUsage   float64
-	WeeklyUsage  float64
-	MonthlyUsage float64
-	Version      int64
+	Status              string
+	ExpiresAt           time.Time
+	DailyUsage          float64
+	WeeklyUsage         float64
+	MonthlyUsage        float64
+	Version             int64
+	WeeklyLimitOverride *float64
 }
 
 // 缓存写入任务类型
@@ -414,6 +415,15 @@ func (s *BillingCacheService) InvalidateUserBalance(ctx context.Context, userID 
 
 // GetSubscriptionStatus 获取订阅状态（优先从缓存读取）
 func (s *BillingCacheService) GetSubscriptionStatus(ctx context.Context, userID, groupID int64) (*subscriptionCacheData, error) {
+	if reader, ok := s.subRepo.(CarpoolSubscriptionReader); ok {
+		sub, carpool, err := reader.GetActiveCarpoolSubscription(ctx, userID, groupID)
+		if err != nil {
+			return nil, err
+		}
+		if carpool {
+			return subscriptionBillingData(sub), nil
+		}
+	}
 	if s.cache == nil {
 		return s.getSubscriptionFromDB(ctx, userID, groupID)
 	}
@@ -470,14 +480,32 @@ func (s *BillingCacheService) getSubscriptionFromDB(ctx context.Context, userID,
 		return nil, fmt.Errorf("get subscription: %w", err)
 	}
 
-	return &subscriptionCacheData{
+	return subscriptionBillingData(sub), nil
+}
+
+func subscriptionBillingData(sub *UserSubscription) *subscriptionCacheData {
+	data := &subscriptionCacheData{
 		Status:       sub.Status,
 		ExpiresAt:    sub.ExpiresAt,
 		DailyUsage:   sub.DailyUsageUSD,
 		WeeklyUsage:  sub.WeeklyUsageUSD,
 		MonthlyUsage: sub.MonthlyUsageUSD,
 		Version:      sub.UpdatedAt.Unix(),
-	}, nil
+	}
+	if sub.UsesCarpoolQuotaTrades() {
+		data.WeeklyLimitOverride = sub.EffectiveWeeklyLimitUSD(sub.Group)
+	}
+	return data
+}
+
+func subscriptionBillingWeeklyLimit(data *subscriptionCacheData, group *Group) *float64 {
+	if data.WeeklyLimitOverride != nil {
+		return data.WeeklyLimitOverride
+	}
+	if !group.HasWeeklyLimit() {
+		return nil
+	}
+	return group.WeeklyLimitUSD
 }
 
 // setSubscriptionCache 设置订阅缓存
@@ -851,7 +879,7 @@ func (s *BillingCacheService) checkFixedChargeSubscription(ctx context.Context, 
 	if group.HasDailyLimit() && subData.DailyUsage+pending > *group.DailyLimitUSD {
 		return ErrDailyLimitExceeded
 	}
-	if group.HasWeeklyLimit() && subData.WeeklyUsage+pending > *group.WeeklyLimitUSD {
+	if limit := subscriptionBillingWeeklyLimit(subData, group); limit != nil && subData.WeeklyUsage+pending > *limit {
 		return ErrWeeklyLimitExceeded
 	}
 	if group.HasMonthlyLimit() && subData.MonthlyUsage+pending > *group.MonthlyLimitUSD {
@@ -1072,7 +1100,7 @@ func (s *BillingCacheService) checkSubscriptionEligibility(ctx context.Context, 
 		return ErrDailyLimitExceeded
 	}
 
-	if group.HasWeeklyLimit() && subData.WeeklyUsage >= *group.WeeklyLimitUSD {
+	if limit := subscriptionBillingWeeklyLimit(subData, group); limit != nil && subData.WeeklyUsage >= *limit {
 		return ErrWeeklyLimitExceeded
 	}
 

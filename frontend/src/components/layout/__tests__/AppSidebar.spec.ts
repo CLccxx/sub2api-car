@@ -73,6 +73,11 @@ describe('AppSidebar subscription feature flag', () => {
     expect(componentSource).toMatch(/path: '\/admin\/subscriptions'[^\n]*featureFlag: flagSubscription/)
   })
 
+  it('exposes carpool quota trade management only alongside full subscription navigation', () => {
+    expect(componentSource).toMatch(/path: '\/admin\/carpool-quota-trades'[^\n]*hideInSimpleMode: true, featureFlag: flagSubscription/)
+    expect(componentSource).toContain("label: t('quotaTrades.admin.title')")
+  })
+
   it('derives the purchase entry label from the site billing mode', () => {
     expect(componentSource).toContain("import { resolveSiteBillingMode } from '@/utils/siteBillingMode'")
     expect(componentSource).toMatch(/case 'recharge_only':\s*return t\('nav\.recharge'\)/)

@@ -31,6 +31,26 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers())
 
 describe('SharedAccountUsage', () => {
+  it('emits the original account estimate for pricing, excluding credits, and clears it on rollover', async () => {
+    getSharedAccountUsage.mockResolvedValue({ ...sample(), seven_day: { ...sample().seven_day, estimated_total_cost: 1600, credits_used_cost: 500, resets_at: new Date(now.getTime() + 1000).toISOString() } })
+    const wrapper = open(); await flushPromises()
+    expect(wrapper.emitted('estimate-updated')?.at(-1)).toEqual([1600])
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(wrapper.emitted('estimate-updated')?.at(-1)).toEqual([null])
+    expect(getSharedAccountUsage).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not expose invalid or unavailable estimates for pricing', async () => {
+    const wrapper = open(); await flushPromises()
+    for (const estimate of [0, -1, NaN, Infinity]) {
+      getSharedAccountUsage.mockResolvedValueOnce({ ...sample(), seven_day: { ...sample().seven_day, estimated_total_cost: estimate } })
+      await wrapper.setProps({ refreshKey: (wrapper.props('refreshKey') ?? 0) + 1 }); await flushPromises()
+      expect(wrapper.emitted('estimate-updated')?.at(-1)).toEqual([null])
+    }
+    getSharedAccountUsage.mockResolvedValueOnce({ ...sample(), status: 'unavailable' })
+    await wrapper.setProps({ refreshKey: 10 }); await flushPromises()
+    expect(wrapper.emitted('estimate-updated')?.at(-1)).toEqual([null])
+  })
   it('shows one expiration per card in the reset count tooltip and hides expired details', async () => {
     const first = new Date(now.getTime() + 2000).toISOString()
     const later = new Date(now.getTime() + 3600_000).toISOString()

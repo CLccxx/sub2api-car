@@ -138,6 +138,9 @@ func assertCarMigrationBeforeOfficial021(t *testing.T, pending map[string]bool) 
 
 func assertCarMigrationPreservesData(t *testing.T, pending map[string]bool) {
 	t.Helper()
+	// Historical releases predate trading and may also predate its reset tables.
+	pending["252_custom_carpool_quota_trades.sql"] = true
+	pending["253_custom_carpool_quota_trade_price.sql"] = true
 	db := officialToCarTestDB(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()

@@ -8,6 +8,7 @@ type NavigationGuard = (
 
 const routerHarness = vi.hoisted(() => ({
   guard: null as NavigationGuard | null,
+  routes: [] as { path: string; meta?: Record<string, unknown> }[],
 }))
 
 const authStore = vi.hoisted(() => ({
@@ -33,13 +34,16 @@ const appStore = vi.hoisted(() => ({
 
 vi.mock('vue-router', () => ({
   createWebHistory: vi.fn(() => ({})),
-  createRouter: vi.fn(() => ({
-    beforeEach: vi.fn((guard: NavigationGuard) => {
-      routerHarness.guard = guard
-    }),
-    afterEach: vi.fn(),
-    onError: vi.fn(),
-  })),
+  createRouter: vi.fn((options: { routes: typeof routerHarness.routes }) => {
+    routerHarness.routes = options.routes
+    return {
+      beforeEach: vi.fn((guard: NavigationGuard) => {
+        routerHarness.guard = guard
+      }),
+      afterEach: vi.fn(),
+      onError: vi.fn(),
+    }
+  }),
 }))
 
 vi.mock('@/stores/auth', () => ({
@@ -108,6 +112,8 @@ function runGuard(meta: Record<string, unknown>, path: string) {
 
 describe('feature route guard', () => {
   beforeAll(async () => {
+    const { loadLocaleMessages } = await import('@/i18n')
+    await loadLocaleMessages('en')
     await import('@/router')
   })
 
@@ -118,6 +124,19 @@ describe('feature route guard', () => {
     appStore.publicSettingsLoaded = false
     appStore.cachedPublicSettings = null
     appStore.fetchPublicSettings.mockReset()
+  })
+
+  it('registers quota trade management as authenticated admin-only and restricts simple mode', async () => {
+    const route = routerHarness.routes.find(route => route.path === '/admin/carpool-quota-trades')
+    expect(route?.meta).toMatchObject({ requiresAuth: true, requiresAdmin: true, titleKey: 'quotaTrades.admin.title' })
+    const nonAdmin = runGuard(route!.meta!, route!.path)
+    await nonAdmin.navigation
+    expect(nonAdmin.next).toHaveBeenCalledWith('/dashboard')
+    authStore.isAdmin = true
+    authStore.isSimpleMode = true
+    const simpleMode = runGuard(route!.meta!, route!.path)
+    await simpleMode.navigation
+    expect(simpleMode.next).toHaveBeenCalledWith('/admin/dashboard')
   })
 
   it('waits for the first public-settings request before deciding payment access', async () => {

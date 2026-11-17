@@ -2201,6 +2201,10 @@ export interface UserSubscription {
   daily_usage_usd: number
   weekly_usage_usd: number
   monthly_usage_usd: number
+  quota_trading_enabled?: boolean
+  quota_adjustment_usd?: number
+  quota_frozen_usd?: number
+  effective_weekly_limit_usd?: number | null
   daily_window_start: string | null
   weekly_window_start: string | null
   monthly_window_start: string | null

@@ -777,6 +777,11 @@ type UserSubscription struct {
 	WeeklyUsageUSD  float64 `json:"weekly_usage_usd"`
 	MonthlyUsageUSD float64 `json:"monthly_usage_usd"`
 
+	QuotaTradingEnabled     bool     `json:"quota_trading_enabled,omitempty"`
+	QuotaAdjustmentUSD      float64  `json:"quota_adjustment_usd,omitempty"`
+	QuotaFrozenUSD          float64  `json:"quota_frozen_usd,omitempty"`
+	EffectiveWeeklyLimitUSD *float64 `json:"effective_weekly_limit_usd,omitempty"`
+
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
 	RevokedAt *time.Time `json:"revoked_at,omitempty"`

@@ -139,14 +139,14 @@
             </div>
 
             <!-- Weekly Usage -->
-            <div v-if="subscription.group?.weekly_limit_usd" class="space-y-2">
+            <div v-if="getEffectiveWeeklyLimit(subscription) != null" class="space-y-2">
               <div class="flex items-center justify-between">
                 <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
                   {{ t('userSubscriptions.weekly') }}
                 </span>
                 <span class="text-sm text-gray-500 dark:text-dark-400">
                   ${{ (subscription.weekly_usage_usd || 0).toFixed(2) }} / ${{
-                    subscription.group.weekly_limit_usd.toFixed(2)
+                    getEffectiveWeeklyLimit(subscription)?.toFixed(2)
                   }}
                 </span>
               </div>
@@ -156,13 +156,13 @@
                   :class="
                     getProgressBarClass(
                       subscription.weekly_usage_usd,
-                      subscription.group.weekly_limit_usd
+                      getEffectiveWeeklyLimit(subscription)
                     )
                   "
                   :style="{
                     width: getProgressWidth(
                       subscription.weekly_usage_usd,
-                      subscription.group.weekly_limit_usd
+                      getEffectiveWeeklyLimit(subscription)
                     )
                   }"
                 ></div>
@@ -224,7 +224,7 @@
             <div
               v-if="
                 !subscription.group?.daily_limit_usd &&
-                !subscription.group?.weekly_limit_usd &&
+                getEffectiveWeeklyLimit(subscription) == null &&
                 !subscription.group?.monthly_limit_usd
               "
               class="flex items-center justify-center rounded-xl bg-gradient-to-r from-emerald-50 to-teal-50 py-6 dark:from-emerald-900/20 dark:to-teal-900/20"
@@ -242,12 +242,22 @@
               </div>
             </div>
           </div>
+          <QuotaTradePanel
+            v-if="subscription.quota_trading_enabled"
+            :subscription-id="subscription.id"
+            :active="subscription.status === 'active' && (!subscription.expires_at || Date.parse(subscription.expires_at) > Date.now())"
+            :refresh-key="sharedRefreshKey"
+            :account-estimate="accountEstimates[subscription.id] ?? null"
+            @quota-updated="updateTradeQuota(subscription, $event)"
+            @changed="onTradeChanged"
+          />
           <SharedAccountUsage
             v-if="subscription.status === 'active' && subscription.group?.platform === 'openai' && (!subscription.expires_at || Date.parse(subscription.expires_at) > Date.now())"
             :subscription-id="subscription.id"
             :expires-at="subscription.expires_at"
             :refresh-key="sharedRefreshKey"
             @reset-completed="onResetCompleted"
+            @estimate-updated="accountEstimates[subscription.id] = $event"
           />
         </div>
       </div>
@@ -265,11 +275,16 @@ import type { UserSubscription } from '@/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
 import SharedAccountUsage from '@/components/subscription/SharedAccountUsage.vue'
+import QuotaTradePanel from '@/components/subscription/QuotaTradePanel.vue'
+import type { QuotaTradeQuota } from '@/types/quotaTrade'
+import { useSubscriptionStore } from '@/stores/subscriptions'
 import { formatDateTimeToMinute } from '@/utils/format'
 import { hasPeakRate, formatPeakRateWindow, serverTimezoneLabel } from '@/utils/peak-rate'
 import { platformBorderClass, platformBadgeClass, platformButtonClass, platformLabel } from '@/utils/platformColors'
 import {
   getExpirationDateRelation,
+  getEffectiveWeeklyLimit,
+  getQuotaUsagePercentage,
   getRemainingDurationParts,
   isOneTimeDailyQuota,
   type RemainingDurationParts
@@ -290,6 +305,7 @@ const router = useRouter()
 const appStore = useAppStore()
 
 const subscriptions = ref<UserSubscription[]>([])
+const accountEstimates = ref<Record<number, number | null>>({})
 const loading = ref(true)
 const sharedRefreshKey = ref(0)
 const completedResetProposals = new Set<number>()
@@ -304,9 +320,23 @@ let subscriptionController: AbortController | null = null
 let loadGeneration = 0
 let disposed = false
 
+function updateTradeQuota(subscription: UserSubscription, quota: QuotaTradeQuota) {
+  subscription.quota_adjustment_usd = quota.adjustment_usd
+  subscription.quota_frozen_usd = quota.frozen_usd
+  subscription.effective_weekly_limit_usd = Math.max(0, quota.base_limit_usd + quota.adjustment_usd - quota.frozen_usd)
+  subscription.weekly_usage_usd = quota.used_usd
+}
+
+function onTradeChanged() {
+  void loadSubscriptions(true)
+  // Refresh the header's cached subscription limits after a trade mutation as well.
+  void useSubscriptionStore().fetchActiveSubscriptions(true).catch(() => {})
+}
+
 function onResetCompleted(proposalId: number) {
   if (disposed || completedResetProposals.has(proposalId) || pendingResetProposals.has(proposalId)) return
   pendingResetProposals.add(proposalId)
+  accountEstimates.value = {}
   sharedRefreshKey.value++
   if (!completionRefreshInFlight && retryTimer === undefined) void refreshCompletedSubscriptions()
 }
@@ -368,14 +398,12 @@ async function loadSubscriptions(background = false): Promise<boolean> {
 }
 
 function getProgressWidth(used: number | undefined, limit: number | null | undefined): string {
-  if (!limit || limit === 0) return '0%'
-  const percentage = Math.min(((used || 0) / limit) * 100, 100)
-  return `${percentage}%`
+  return `${getQuotaUsagePercentage(used, limit)}%`
 }
 
 function getProgressBarClass(used: number | undefined, limit: number | null | undefined): string {
-  if (!limit || limit === 0) return 'bg-gray-400'
-  const percentage = ((used || 0) / limit) * 100
+  if (limit == null) return 'bg-gray-400'
+  const percentage = getQuotaUsagePercentage(used, limit)
   if (percentage >= 90) return 'bg-red-500'
   if (percentage >= 70) return 'bg-orange-500'
   return 'bg-green-500'

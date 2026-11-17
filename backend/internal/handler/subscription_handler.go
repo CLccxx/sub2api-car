@@ -161,8 +161,8 @@ func (h *SubscriptionHandler) GetSummary(c *gin.Context) {
 			if sub.Group.DailyLimitUSD != nil {
 				item.DailyLimitUSD = *sub.Group.DailyLimitUSD
 			}
-			if sub.Group.WeeklyLimitUSD != nil {
-				item.WeeklyLimitUSD = *sub.Group.WeeklyLimitUSD
+			if limit := sub.EffectiveWeeklyLimitUSD(sub.Group); limit != nil {
+				item.WeeklyLimitUSD = *limit
 			}
 			if sub.Group.MonthlyLimitUSD != nil {
 				item.MonthlyLimitUSD = *sub.Group.MonthlyLimitUSD

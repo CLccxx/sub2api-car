@@ -100,7 +100,7 @@
                   </span>
                 </div>
 
-                <div v-if="subscription.group?.weekly_limit_usd" class="flex items-center gap-2">
+                <div v-if="getEffectiveWeeklyLimit(subscription) != null" class="flex items-center gap-2">
                   <span class="w-8 flex-shrink-0 text-[10px] text-gray-500">{{
                     t('subscriptionProgress.weekly')
                   }}</span>
@@ -110,20 +110,20 @@
                       :class="
                         getProgressBarClass(
                           subscription.weekly_usage_usd,
-                          subscription.group?.weekly_limit_usd
+                          getEffectiveWeeklyLimit(subscription)
                         )
                       "
                       :style="{
                         width: getProgressWidth(
                           subscription.weekly_usage_usd,
-                          subscription.group?.weekly_limit_usd
+                          getEffectiveWeeklyLimit(subscription)
                         )
                       }"
                     ></div>
                   </div>
                   <span class="w-24 flex-shrink-0 text-right text-[10px] text-gray-500">
                     {{
-                      formatUsage(subscription.weekly_usage_usd, subscription.group?.weekly_limit_usd)
+                      formatUsage(subscription.weekly_usage_usd, getEffectiveWeeklyLimit(subscription))
                     }}
                   </span>
                 </div>
@@ -184,7 +184,7 @@ import Icon from '@/components/icons/Icon.vue'
 import { useSubscriptionStore } from '@/stores'
 import { FeatureFlags, isFeatureFlagEnabled } from '@/utils/featureFlags'
 import type { UserSubscription } from '@/types'
-import { getExpirationDateRelation } from '@/utils/subscriptionQuota'
+import { getExpirationDateRelation, getEffectiveWeeklyLimit, getQuotaUsagePercentage } from '@/utils/subscriptionQuota'
 
 const { t } = useI18n()
 
@@ -213,8 +213,9 @@ function getMaxUsagePercentage(sub: UserSubscription): number {
   if (sub.group?.daily_limit_usd) {
     percentages.push(((sub.daily_usage_usd || 0) / sub.group.daily_limit_usd) * 100)
   }
-  if (sub.group?.weekly_limit_usd) {
-    percentages.push(((sub.weekly_usage_usd || 0) / sub.group.weekly_limit_usd) * 100)
+  const weeklyLimit = getEffectiveWeeklyLimit(sub)
+  if (weeklyLimit != null) {
+    percentages.push(getQuotaUsagePercentage(sub.weekly_usage_usd, weeklyLimit))
   }
   if (sub.group?.monthly_limit_usd) {
     percentages.push(((sub.monthly_usage_usd || 0) / sub.group.monthly_limit_usd) * 100)
@@ -225,7 +226,7 @@ function getMaxUsagePercentage(sub: UserSubscription): number {
 function isUnlimited(sub: UserSubscription): boolean {
   return (
     !sub.group?.daily_limit_usd &&
-    !sub.group?.weekly_limit_usd &&
+    getEffectiveWeeklyLimit(sub) == null &&
     !sub.group?.monthly_limit_usd
   )
 }
@@ -242,17 +243,15 @@ function getProgressDotClass(sub: UserSubscription): string {
 }
 
 function getProgressBarClass(used: number | undefined, limit: number | null | undefined): string {
-  if (!limit || limit === 0) return 'bg-gray-400'
-  const percentage = ((used || 0) / limit) * 100
+  if (limit == null) return 'bg-gray-400'
+  const percentage = getQuotaUsagePercentage(used, limit)
   if (percentage >= 90) return 'bg-red-500'
   if (percentage >= 70) return 'bg-orange-500'
   return 'bg-green-500'
 }
 
 function getProgressWidth(used: number | undefined, limit: number | null | undefined): string {
-  if (!limit || limit === 0) return '0%'
-  const percentage = Math.min(((used || 0) / limit) * 100, 100)
-  return `${percentage}%`
+  return `${getQuotaUsagePercentage(used, limit)}%`
 }
 
 function formatUsage(used: number | undefined, limit: number | null | undefined): string {

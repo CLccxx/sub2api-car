@@ -1,6 +1,25 @@
 import { describe, expect, it } from 'vitest'
 
-import { getExpirationDateRelation, getRemainingExpiryDuration } from '../subscriptionQuota'
+import { getExpirationDateRelation, getRemainingExpiryDuration, getEffectiveWeeklyLimit, getQuotaUsagePercentage } from '../subscriptionQuota'
+import type { Group } from '@/types'
+
+describe('effective subscription quota', () => {
+  const group = (limit: number | null) => ({ weekly_limit_usd: limit } as Group)
+  it('freezes 50 immediately, preserving that freeze when the dynamic base falls from 400 to 370', () => {
+    expect(getEffectiveWeeklyLimit({ group: group(400), quota_frozen_usd: 50 })).toBe(350)
+    expect(getEffectiveWeeklyLimit({ group: group(370), quota_frozen_usd: 50 })).toBe(320)
+    expect(getEffectiveWeeklyLimit({ group: group(370), quota_adjustment_usd: -50, quota_frozen_usd: 0 })).toBe(320)
+    expect(getEffectiveWeeklyLimit({ group: group(370), quota_adjustment_usd: 50 })).toBe(420)
+  })
+  it('prefers the server effective limit including zero and negative values', () => {
+    for (const limit of [0, -30, 350]) expect(getEffectiveWeeklyLimit({ group: group(400), effective_weekly_limit_usd: limit })).toBe(limit)
+    expect(getEffectiveWeeklyLimit({ group: group(null) })).toBeNull()
+    expect(getEffectiveWeeklyLimit({ group: group(0) })).toBeNull()
+  })
+  it.each([[0, -30, 100], [0, 0, 100], [50, 100, 50], [500, 100, 100], [-2, 100, 0], [0, null, 0], [NaN, 100, 0]])('renders safe progress for used %s / limit %s', (used, limit, result) => {
+    expect(getQuotaUsagePercentage(used, limit)).toBe(result)
+  })
+})
 
 describe('subscription expiry timing', () => {
   it('uses local calendar dates for today and tomorrow', () => {

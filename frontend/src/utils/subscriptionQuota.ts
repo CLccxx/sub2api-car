@@ -2,6 +2,24 @@ import type { UserSubscription } from '@/types'
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000
 
+/** Preserve zero/negative effective limits: frozen quota must not appear unlimited. */
+export function getEffectiveWeeklyLimit(subscription: Pick<UserSubscription,
+  'group' | 'effective_weekly_limit_usd' | 'quota_adjustment_usd' | 'quota_frozen_usd'
+>): number | null {
+  if (subscription.effective_weekly_limit_usd != null) return subscription.effective_weekly_limit_usd
+  const base = subscription.group?.weekly_limit_usd
+  if (base == null) return null
+  if (base === 0 && !(subscription.quota_adjustment_usd || subscription.quota_frozen_usd)) return null
+  return base + (subscription.quota_adjustment_usd ?? 0) - (subscription.quota_frozen_usd ?? 0)
+}
+
+export function getQuotaUsagePercentage(used: number | null | undefined, limit: number | null | undefined): number {
+  if (limit == null || !Number.isFinite(limit)) return 0
+  if (limit <= 0) return 100
+  const usage = Number.isFinite(used) ? Math.max(0, used ?? 0) : 0
+  return Math.max(0, Math.min((usage / limit) * 100, 100))
+}
+
 export type ExpirationDateRelation = 'expired' | 'today' | 'tomorrow' | 'later'
 
 export type RemainingExpiryDuration =

@@ -90,7 +90,7 @@ import ResetVotePanel from './ResetVotePanel.vue'
 import { formatDateTimeToMinute } from '@/utils/format'
 
 const props = withDefaults(defineProps<{ subscriptionId: number; expiresAt: string | null; refreshKey?: number }>(), { refreshKey: 0 })
-const emit = defineEmits<{ 'reset-completed': [proposalId: number] }>()
+const emit = defineEmits<{ 'reset-completed': [proposalId: number]; 'estimate-updated': [estimate: number | null] }>()
 const { t } = useI18n()
 const usage = ref<SharedAccountUsage | null>(null)
 const loading = ref(false)
@@ -122,6 +122,12 @@ const estimateText = computed(() => {
   const value = usage.value?.seven_day?.estimated_total_cost
   return !rolledOver.value && typeof value === 'number' && Number.isFinite(value) && value >= 0 ? `$${value.toFixed(2)}` : unknown.value
 })
+const accountEstimate = computed(() => {
+  const value = usage.value?.seven_day?.estimated_total_cost
+  return !expired.value && !loading.value && !failed.value && !rolledOver.value && usage.value?.status === 'ready' &&
+    typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
+})
+watch(accountEstimate, value => emit('estimate-updated', value), { immediate: true })
 const creditCostText = computed(() => {
   const value = usage.value?.seven_day?.credits_used_cost
   return !rolledOver.value && typeof value === 'number' && Number.isFinite(value) && value >= 0 ? `$${value.toFixed(2)}` : unknown.value
