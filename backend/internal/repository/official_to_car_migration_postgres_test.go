@@ -138,9 +138,14 @@ func assertCarMigrationBeforeOfficial021(t *testing.T, pending map[string]bool) 
 
 func assertCarMigrationPreservesData(t *testing.T, pending map[string]bool) {
 	t.Helper()
-	// Historical releases predate trading and may also predate its reset tables.
+	// These historical releases predate the bonus/trading additions and official
+	// 0.2.22. Exclude by full filename, not numeric prefix: all three 251 files
+	// coexist, and treating an upstream 251 as historical builds the wrong DB.
+	pending["251_custom_group_carpool_bonus.sql"] = true
 	pending["252_custom_carpool_quota_trades.sql"] = true
 	pending["253_custom_carpool_quota_trade_price.sql"] = true
+	pending["251_group_force_openai_ultrafast.sql"] = true
+	pending["251_group_usage_rollup_nonblocking_build.sql"] = true
 	db := officialToCarTestDB(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -289,6 +294,12 @@ func assertCarMigrationPreservesData(t *testing.T, pending map[string]bool) {
 				expression += " - 'cache_creation_30m_tokens' - 'cache_creation_12h_tokens'"
 			}
 			if table == "groups" {
+				if pending["251_custom_group_carpool_bonus.sql"] {
+					expression += " - 'carpool_bonus_usd'"
+				}
+				if pending["251_group_force_openai_ultrafast.sql"] {
+					expression += " - 'force_openai_ultrafast'"
+				}
 				if pending["237_custom_group_carpool.sql"] {
 					expression += " - 'carpool_members' - 'carpool_quota_synced_at'"
 				}

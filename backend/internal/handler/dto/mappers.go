@@ -152,6 +152,7 @@ func GroupFromServiceAdmin(g *service.Group) *AdminGroup {
 		CarpoolBonusUSD:             g.CarpoolBonusUSD,
 		CarpoolQuotaSyncedAt:        g.CarpoolQuotaSyncedAt,
 		ForceOpenAIFast:             g.ForceOpenAIFast,
+		ForceOpenAIUltrafast:        g.ForceOpenAIUltrafast,
 		FreeOpenAIFast:              g.FreeOpenAIFast,
 		ProfitControlEnabled:        g.ProfitControlEnabled,
 		ProfitMinMargin:             g.ProfitMinMargin,

@@ -175,7 +175,8 @@ type AdminGroup struct {
 	CarpoolBonusUSD      float64    `json:"carpool_bonus_usd"`
 	CarpoolQuotaSyncedAt *time.Time `json:"carpool_quota_synced_at"`
 	// ForceOpenAIFast 是管理端请求策略，用户侧分组 DTO 无需暴露。
-	ForceOpenAIFast bool `json:"force_openai_fast"`
+	ForceOpenAIFast      bool `json:"force_openai_fast"`
+	ForceOpenAIUltrafast bool `json:"force_openai_ultrafast"`
 	// FreeOpenAIFast 是管理端计费策略，用户侧分组 DTO 无需暴露。
 	FreeOpenAIFast bool `json:"free_openai_fast"`
 
