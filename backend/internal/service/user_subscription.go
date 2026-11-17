@@ -25,6 +25,10 @@ type UserSubscription struct {
 	WeeklyUsageUSD  float64
 	MonthlyUsageUSD float64
 
+	// Account-cycle trade entitlements are read from the current trade ledger.
+	QuotaAdjustmentUSD float64
+	QuotaFrozenUSD     float64
+
 	AssignedBy *int64
 	AssignedAt time.Time
 	Notes      string
@@ -211,11 +215,34 @@ func (s *UserSubscription) CheckDailyLimit(group *Group, additionalCost float64)
 	return s.DailyUsageUSD+additionalCost <= *group.DailyLimitUSD
 }
 
+func (s *UserSubscription) UsesCarpoolQuotaTrades() bool {
+	return s != nil && s.Group != nil && s.Group.Platform == PlatformOpenAI &&
+		s.Group.IsSubscriptionType() && s.Group.CarpoolMembers >= 2 && s.Group.CarpoolMembers <= 5
+}
+
+// EffectiveWeeklyLimitUSD keeps the shared base separate from personal trades.
+// A falling base can leave no spendable quota; it must not release a listing.
+func (s *UserSubscription) EffectiveWeeklyLimitUSD(group *Group) *float64 {
+	if group == nil || !group.HasWeeklyLimit() {
+		return nil
+	}
+	base := *group.WeeklyLimitUSD
+	if s.UsesCarpoolQuotaTrades() && s.Group.ID == group.ID && s.Group.HasWeeklyLimit() {
+		base = *s.Group.WeeklyLimitUSD
+	}
+	limit := base + s.QuotaAdjustmentUSD - s.QuotaFrozenUSD
+	if limit < 0 {
+		limit = 0
+	}
+	return &limit
+}
+
 func (s *UserSubscription) CheckWeeklyLimit(group *Group, additionalCost float64) bool {
-	if !group.HasWeeklyLimit() {
+	limit := s.EffectiveWeeklyLimitUSD(group)
+	if limit == nil {
 		return true
 	}
-	return s.WeeklyUsageUSD+additionalCost <= *group.WeeklyLimitUSD
+	return *limit > 0 && s.WeeklyUsageUSD+additionalCost <= *limit
 }
 
 func (s *UserSubscription) CheckMonthlyLimit(group *Group, additionalCost float64) bool {

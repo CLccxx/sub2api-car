@@ -144,6 +144,13 @@ func RegisterUserRoutes(
 			subscriptions.GET("/:id/reset-vote", h.Subscription.GetResetVote)
 			subscriptions.POST("/:id/reset-vote", panelRateLimiter.Heavy(), h.Subscription.CreateResetVote)
 			subscriptions.POST("/:id/reset-vote/:proposal/agree", panelRateLimiter.Heavy(), h.Subscription.AgreeResetVote)
+			if h.CarpoolQuotaTrade != nil {
+				subscriptions.GET("/:id/quota-trades", h.CarpoolQuotaTrade.Market)
+				subscriptions.POST("/:id/quota-trades", panelRateLimiter.Heavy(), h.CarpoolQuotaTrade.Create)
+				subscriptions.POST("/:id/quota-trades/:trade_id/reserve", h.CarpoolQuotaTrade.Reserve)
+				subscriptions.POST("/:id/quota-trades/:trade_id/confirm", h.CarpoolQuotaTrade.Confirm)
+				subscriptions.POST("/:id/quota-trades/:trade_id/withdraw", h.CarpoolQuotaTrade.Withdraw)
+			}
 		}
 
 		// 渠道监控（用户只读）

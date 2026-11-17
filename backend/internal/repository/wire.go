@@ -73,6 +73,7 @@ var ProviderSet = wire.NewSet(
 	NewCarpoolQuotaRepository,
 	NewCarpoolResetMonitorRepository,
 	NewCarpoolResetVoteRepository,
+	NewCarpoolQuotaTradeRepository,
 	NewQuotaResetCoordinator,
 	NewCompositeModelRouteRepository,
 	NewAccountRepository,

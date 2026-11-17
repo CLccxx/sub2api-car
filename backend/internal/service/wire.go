@@ -957,6 +957,7 @@ var ProviderSet = wire.NewSet(
 	ProvideCarpoolQuotaService,
 	ProvideCarpoolResetMonitorService,
 	ProvideCarpoolResetVoteService,
+	NewCarpoolQuotaTradeService,
 	wire.Bind(new(DefaultSubscriptionAssigner), new(*SubscriptionService)),
 	ProvideConcurrencyService,
 	ProvideUserMessageQueueService,

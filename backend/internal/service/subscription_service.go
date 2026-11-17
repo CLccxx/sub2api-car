@@ -743,6 +743,12 @@ func (s *SubscriptionService) GetByID(ctx context.Context, id int64) (*UserSubsc
 // 使用 L1 缓存 + singleflight 加速中间件热路径。
 // 返回缓存对象的浅拷贝，调用方可安全修改字段而不会污染缓存或触发 data race。
 func (s *SubscriptionService) GetActiveSubscription(ctx context.Context, userID, groupID int64) (*UserSubscription, error) {
+	// Trading entitlements and dynamic bases must not be restored by old L1 fills.
+	if reader, ok := s.userSubRepo.(CarpoolSubscriptionReader); ok {
+		if sub, carpool, err := reader.GetActiveCarpoolSubscription(ctx, userID, groupID); err != nil || carpool {
+			return sub, err
+		}
+	}
 	key := subCacheKey(userID, groupID)
 
 	// L1 缓存命中：返回浅拷贝
@@ -1177,7 +1183,11 @@ func (s *SubscriptionService) calculateProgress(sub *UserSubscription, group *Gr
 
 	// 周进度
 	if group.HasWeeklyLimit() && sub.WeeklyWindowStart != nil {
-		limit := *group.WeeklyLimitUSD
+		limit := *sub.EffectiveWeeklyLimitUSD(group)
+		percentage := 100.0
+		if limit > 0 {
+			percentage = (sub.WeeklyUsageUSD / limit) * 100
+		}
 		resetsAt := sub.WeeklyWindowStart.Add(7 * 24 * time.Hour)
 		if weeklyResetTime := sub.WeeklyResetTime(); weeklyResetTime != nil {
 			resetsAt = *weeklyResetTime
@@ -1186,7 +1196,7 @@ func (s *SubscriptionService) calculateProgress(sub *UserSubscription, group *Gr
 			LimitUSD:        limit,
 			UsedUSD:         sub.WeeklyUsageUSD,
 			RemainingUSD:    limit - sub.WeeklyUsageUSD,
-			Percentage:      (sub.WeeklyUsageUSD / limit) * 100,
+			Percentage:      percentage,
 			WindowStart:     *sub.WeeklyWindowStart,
 			ResetsAt:        resetsAt,
 			ResetsInSeconds: int64(time.Until(resetsAt).Seconds()),

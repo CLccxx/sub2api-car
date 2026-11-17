@@ -537,6 +537,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/carpool-quota-trades',
+    name: 'AdminQuotaTrades',
+    component: () => import('@/views/admin/QuotaTradesView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Carpool Quota Trades',
+      titleKey: 'quotaTrades.admin.title',
+      descriptionKey: 'quotaTrades.admin.description'
+    }
+  },
+  {
     path: '/admin/accounts',
     name: 'AdminAccounts',
     component: () => import('@/views/admin/AccountsView.vue'),
@@ -973,6 +985,7 @@ router.beforeEach(async (to, _from, next) => {
   if (authStore.isSimpleMode) {
     const restrictedPaths = [
       '/admin/subscriptions',
+      '/admin/carpool-quota-trades',
       '/admin/redeem',
       '/subscriptions',
       '/redeem'

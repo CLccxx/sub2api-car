@@ -92,6 +92,14 @@ func RegisterAdminRoutes(
 
 		// 订阅管理
 		registerSubscriptionRoutes(admin, h)
+		if h.CarpoolQuotaTrade != nil {
+			trades := admin.Group("/carpool-quota-trades")
+			trades.GET("", h.CarpoolQuotaTrade.AdminList)
+			trades.GET("/:trade_id/events", h.CarpoolQuotaTrade.AdminEvents)
+			trades.POST("/:trade_id/confirm", h.CarpoolQuotaTrade.AdminConfirm)
+			trades.POST("/:trade_id/cancel-reservation", h.CarpoolQuotaTrade.AdminCancelReservation)
+			trades.POST("/:trade_id/withdraw", h.CarpoolQuotaTrade.AdminWithdraw)
+		}
 
 		// 使用记录管理
 		registerUsageRoutes(admin, h)

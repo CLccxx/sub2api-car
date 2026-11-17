@@ -72,7 +72,11 @@ func (r *userSubscriptionRepository) GetByID(ctx context.Context, id int64) (*se
 	if err != nil {
 		return nil, translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
 	}
-	return userSubscriptionEntityToService(m), nil
+	sub := userSubscriptionEntityToService(m)
+	if err := loadCarpoolQuotaTradeEntitlements(ctx, client, []*service.UserSubscription{sub}); err != nil {
+		return nil, err
+	}
+	return sub, nil
 }
 
 func (r *userSubscriptionRepository) GetByIDForUpdate(ctx context.Context, id int64) (*service.UserSubscription, error) {
@@ -84,7 +88,11 @@ func (r *userSubscriptionRepository) GetByIDForUpdate(ctx context.Context, id in
 	if err != nil {
 		return nil, translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
 	}
-	return userSubscriptionEntityToService(m), nil
+	sub := userSubscriptionEntityToService(m)
+	if err := loadCarpoolQuotaTradeEntitlements(ctx, client, []*service.UserSubscription{sub}); err != nil {
+		return nil, err
+	}
+	return sub, nil
 }
 
 func (r *userSubscriptionRepository) GetByIDIncludeDeleted(ctx context.Context, id int64) (*service.UserSubscription, error) {
@@ -99,7 +107,11 @@ func (r *userSubscriptionRepository) GetByIDIncludeDeleted(ctx context.Context, 
 	if err != nil {
 		return nil, translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
 	}
-	return userSubscriptionEntityToServicePreserveStatus(m), nil
+	sub := userSubscriptionEntityToServicePreserveStatus(m)
+	if err := loadCarpoolQuotaTradeEntitlements(ctx, client, []*service.UserSubscription{sub}); err != nil {
+		return nil, err
+	}
+	return sub, nil
 }
 
 func (r *userSubscriptionRepository) GetByUserIDAndGroupID(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
@@ -111,7 +123,11 @@ func (r *userSubscriptionRepository) GetByUserIDAndGroupID(ctx context.Context, 
 	if err != nil {
 		return nil, translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
 	}
-	return userSubscriptionEntityToService(m), nil
+	sub := userSubscriptionEntityToService(m)
+	if err := loadCarpoolQuotaTradeEntitlements(ctx, client, []*service.UserSubscription{sub}); err != nil {
+		return nil, err
+	}
+	return sub, nil
 }
 
 func (r *userSubscriptionRepository) GetActiveByUserIDAndGroupID(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
@@ -128,7 +144,11 @@ func (r *userSubscriptionRepository) GetActiveByUserIDAndGroupID(ctx context.Con
 	if err != nil {
 		return nil, translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
 	}
-	return userSubscriptionEntityToService(m), nil
+	sub := userSubscriptionEntityToService(m)
+	if err := loadCarpoolQuotaTradeEntitlements(ctx, client, []*service.UserSubscription{sub}); err != nil {
+		return nil, err
+	}
+	return sub, nil
 }
 
 func (r *userSubscriptionRepository) Update(ctx context.Context, sub *service.UserSubscription) error {
@@ -192,7 +212,11 @@ func (r *userSubscriptionRepository) ListByUserID(ctx context.Context, userID in
 	if err != nil {
 		return nil, err
 	}
-	return userSubscriptionEntitiesToService(subs), nil
+	result := userSubscriptionEntitiesToService(subs)
+	if err := loadCarpoolQuotaTradeEntitlements(ctx, client, subscriptionPointers(result)); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (r *userSubscriptionRepository) ListActiveByUserID(ctx context.Context, userID int64) ([]service.UserSubscription, error) {
@@ -209,7 +233,11 @@ func (r *userSubscriptionRepository) ListActiveByUserID(ctx context.Context, use
 	if err != nil {
 		return nil, err
 	}
-	return userSubscriptionEntitiesToService(subs), nil
+	result := userSubscriptionEntitiesToService(subs)
+	if err := loadCarpoolQuotaTradeEntitlements(ctx, client, subscriptionPointers(result)); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 // ListActiveIDs captures the global target set in one query, avoiding offset
@@ -245,7 +273,11 @@ func (r *userSubscriptionRepository) ListByGroupID(ctx context.Context, groupID 
 		return nil, nil, err
 	}
 
-	return userSubscriptionEntitiesToService(subs), paginationResultFromTotal(int64(total), params), nil
+	result := userSubscriptionEntitiesToService(subs)
+	if err := loadCarpoolQuotaTradeEntitlements(ctx, client, subscriptionPointers(result)); err != nil {
+		return nil, nil, err
+	}
+	return result, paginationResultFromTotal(int64(total), params), nil
 }
 
 func (r *userSubscriptionRepository) List(ctx context.Context, params pagination.PaginationParams, userID, groupID *int64, status, platform, sortBy, sortOrder string) ([]service.UserSubscription, *pagination.PaginationResult, error) {
@@ -343,6 +375,9 @@ func (r *userSubscriptionRepository) List(ctx context.Context, params pagination
 		}
 	}
 
+	if err := loadCarpoolQuotaTradeEntitlements(ctx, client, subscriptionPointers(result)); err != nil {
+		return nil, nil, err
+	}
 	return result, paginationResultFromTotal(int64(total), params), nil
 }
 
@@ -540,7 +575,11 @@ func (r *userSubscriptionRepository) ListExpired(ctx context.Context) ([]service
 	if err != nil {
 		return nil, err
 	}
-	return userSubscriptionEntitiesToService(subs), nil
+	result := userSubscriptionEntitiesToService(subs)
+	if err := loadCarpoolQuotaTradeEntitlements(ctx, client, subscriptionPointers(result)); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (r *userSubscriptionRepository) CountByGroupID(ctx context.Context, groupID int64) (int64, error) {
@@ -622,6 +661,14 @@ func (r *userSubscriptionRepository) attachUserSubscriptionRelations(ctx context
 		}
 	}
 	return nil
+}
+
+func subscriptionPointers(subs []service.UserSubscription) []*service.UserSubscription {
+	out := make([]*service.UserSubscription, len(subs))
+	for i := range subs {
+		out[i] = &subs[i]
+	}
+	return out
 }
 
 func uniqueInt64s(values []int64) []int64 {
