@@ -1076,6 +1076,9 @@ export default {
       carpool: {
         enabled: 'Shared account quota',
         members: 'Members sharing the account',
+        bonus: 'Extra quota per person (USD)',
+        bonusHint: 'Saving immediately updates the weekly quota. Automatic updates continue every 30 minutes, at :00 and :30 (Asia/Shanghai).',
+        bonusInvalid: 'Enter an amount from 0 to 10,000,000,000 USD with at most two decimal places.',
         schedule: 'Quota update schedule',
         scheduleValue: 'Every 30 minutes, at :00 and :30 (Asia/Shanghai)',
         lastUpdated: 'Last synchronized'

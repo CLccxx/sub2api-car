@@ -920,6 +920,7 @@ var (
 		{Name: "platform", Type: field.TypeString, Size: 50, Default: "anthropic"},
 		{Name: "subscription_type", Type: field.TypeString, Size: 20, Default: "standard"},
 		{Name: "carpool_members", Type: field.TypeInt, Default: 0},
+		{Name: "carpool_bonus_usd", Type: field.TypeFloat64, Default: 100, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
 		{Name: "carpool_quota_synced_at", Type: field.TypeTime, Nullable: true},
 		{Name: "daily_limit_usd", Type: field.TypeFloat64, Nullable: true, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
 		{Name: "weekly_limit_usd", Type: field.TypeFloat64, Nullable: true, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
@@ -1008,7 +1009,7 @@ var (
 			{
 				Name:    "group_sort_order",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[53]},
+				Columns: []*schema.Column{GroupsColumns[54]},
 			},
 			{
 				Name:    "idx_groups_duplicate_operation_id_active",

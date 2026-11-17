@@ -50,6 +50,8 @@ const (
 	FieldSubscriptionType = "subscription_type"
 	// FieldCarpoolMembers holds the string denoting the carpool_members field in the database.
 	FieldCarpoolMembers = "carpool_members"
+	// FieldCarpoolBonusUsd holds the string denoting the carpool_bonus_usd field in the database.
+	FieldCarpoolBonusUsd = "carpool_bonus_usd"
 	// FieldCarpoolQuotaSyncedAt holds the string denoting the carpool_quota_synced_at field in the database.
 	FieldCarpoolQuotaSyncedAt = "carpool_quota_synced_at"
 	// FieldDailyLimitUsd holds the string denoting the daily_limit_usd field in the database.
@@ -248,6 +250,7 @@ var Columns = []string{
 	FieldPlatform,
 	FieldSubscriptionType,
 	FieldCarpoolMembers,
+	FieldCarpoolBonusUsd,
 	FieldCarpoolQuotaSyncedAt,
 	FieldDailyLimitUsd,
 	FieldWeeklyLimitUsd,
@@ -372,6 +375,10 @@ var (
 	SubscriptionTypeValidator func(string) error
 	// DefaultCarpoolMembers holds the default value on creation for the "carpool_members" field.
 	DefaultCarpoolMembers int
+	// DefaultCarpoolBonusUsd holds the default value on creation for the "carpool_bonus_usd" field.
+	DefaultCarpoolBonusUsd float64
+	// CarpoolBonusUsdValidator is a validator for the "carpool_bonus_usd" field. It is called by the builders before save.
+	CarpoolBonusUsdValidator func(float64) error
 	// DefaultDefaultValidityDays holds the default value on creation for the "default_validity_days" field.
 	DefaultDefaultValidityDays int
 	// DefaultAllowImageGeneration holds the default value on creation for the "allow_image_generation" field.
@@ -540,6 +547,11 @@ func BySubscriptionType(opts ...sql.OrderTermOption) OrderOption {
 // ByCarpoolMembers orders the results by the carpool_members field.
 func ByCarpoolMembers(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldCarpoolMembers, opts...).ToFunc()
+}
+
+// ByCarpoolBonusUsd orders the results by the carpool_bonus_usd field.
+func ByCarpoolBonusUsd(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldCarpoolBonusUsd, opts...).ToFunc()
 }
 
 // ByCarpoolQuotaSyncedAt orders the results by the carpool_quota_synced_at field.

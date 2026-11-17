@@ -726,9 +726,12 @@
           <!-- Subscription limits (only show when subscription type is selected) -->
           <CarpoolSettings
             v-if="createForm.platform === 'openai' && createForm.subscription_type === 'subscription'"
+            ref="createCarpoolSettingsRef"
             :members="createForm.carpool_members"
+            :bonus="createForm.carpool_bonus_usd"
             class="my-4"
             @update:members="applyCarpoolMembers(createForm, $event)"
+            @update:bonus="applyCarpoolBonus(createForm, $event)"
           />
           <div
             v-if="createForm.subscription_type === 'subscription'"
@@ -2389,10 +2392,13 @@
           <!-- Subscription limits (only show when subscription type is selected) -->
           <CarpoolSettings
             v-if="editForm.platform === 'openai' && editForm.subscription_type === 'subscription'"
+            ref="editCarpoolSettingsRef"
             :members="editForm.carpool_members"
+            :bonus="editForm.carpool_bonus_usd"
             :synced-at="editingGroup.carpool_quota_synced_at"
             class="my-4"
             @update:members="applyCarpoolMembers(editForm, $event)"
+            @update:bonus="applyCarpoolBonus(editForm, $event)"
           />
           <div
             v-if="editForm.subscription_type === 'subscription'"
@@ -4351,7 +4357,12 @@ import GroupI18nField from "@/components/admin/group/GroupI18nField.vue";
 import GroupRateMultipliersModal from "@/components/admin/group/GroupRateMultipliersModal.vue";
 import GroupRPMOverridesModal from "@/components/admin/group/GroupRPMOverridesModal.vue";
 import CarpoolSettings from "@/components/admin/group/CarpoolSettings.vue";
-import { applyCarpoolMembers } from "@/components/admin/group/carpoolSettings";
+import {
+  DEFAULT_CARPOOL_BONUS_USD,
+  applyCarpoolBonus,
+  applyCarpoolMembers,
+  isValidCarpoolBonus,
+} from "@/components/admin/group/carpoolSettings";
 import GroupCapacityBadge from "@/components/common/GroupCapacityBadge.vue";
 import ReasoningEffortPolicyFields from "@/components/admin/group/ReasoningEffortPolicyFields.vue";
 import CodexManifestAccountsField from "@/components/admin/group/CodexManifestAccountsField.vue";
@@ -4943,6 +4954,8 @@ type ReasoningEffortPolicyFieldsExpose = {
 };
 const createReasoningEffortPolicyRef = ref<ReasoningEffortPolicyFieldsExpose | null>(null);
 const editReasoningEffortPolicyRef = ref<ReasoningEffortPolicyFieldsExpose | null>(null);
+const createCarpoolSettingsRef = ref<InstanceType<typeof CarpoolSettings> | null>(null);
+const editCarpoolSettingsRef = ref<InstanceType<typeof CarpoolSettings> | null>(null);
 
 // 固定账号获取 Codex Model Manifest（仅 openai 分组编辑对话框）
 type CodexManifestAccountsFieldExpose = {
@@ -4995,6 +5008,7 @@ const submitEditAllowlistCustomEntry = () => {
 
 const createForm = reactive({
   carpool_members: 0,
+  carpool_bonus_usd: DEFAULT_CARPOOL_BONUS_USD,
   name: "",
   description: "",
   i18n: {} as GroupI18n,
@@ -5362,6 +5376,7 @@ const convertApiFormatToRoutingRules = async (
 
 const editForm = reactive({
   carpool_members: 0,
+  carpool_bonus_usd: DEFAULT_CARPOOL_BONUS_USD,
   name: "",
   description: "",
   i18n: {} as GroupI18n,
@@ -5847,6 +5862,7 @@ const closeCreateModal = () => {
   createForm.is_exclusive = false;
   createForm.subscription_type = "standard";
   createForm.carpool_members = 0;
+  createForm.carpool_bonus_usd = DEFAULT_CARPOOL_BONUS_USD;
   createForm.daily_limit_usd = null;
   createForm.weekly_limit_usd = null;
   createForm.monthly_limit_usd = null;
@@ -5954,7 +5970,21 @@ const validateGroupReasoningMultipliers = (pricing: PricingFormEntry[]): boolean
   return true;
 };
 
+const validateCarpoolForm = (
+  bonus: number,
+  settings: InstanceType<typeof CarpoolSettings> | null,
+): boolean => {
+  if (authStore.isSimpleMode) return true;
+  if (!isValidCarpoolBonus(bonus) || settings?.validate() === false) {
+    appStore.showError(t("admin.groups.carpool.bonusInvalid"));
+    return false;
+  }
+  return true;
+};
+
 const handleCreateGroup = async () => {
+  if (submitting.value) return;
+  if (!validateCarpoolForm(createForm.carpool_bonus_usd, createCarpoolSettingsRef.value)) return;
   if (!createForm.name.trim()) {
     appStore.showError(t("admin.groups.nameRequired"));
     return;
@@ -6106,7 +6136,7 @@ const handleCreateGroup = async () => {
     await adminAPI.groups.create(payload);
     appStore.showSuccess(t("admin.groups.groupCreated"));
     closeCreateModal();
-    loadGroups();
+    await loadGroups();
     // Only advance tour if active, on submit step, and creation succeeded
     if (onboardingStore.isCurrentStep('[data-tour="group-form-submit"]')) {
       onboardingStore.nextStep(500);
@@ -6141,7 +6171,8 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.weekly_limit_usd = group.weekly_limit_usd;
   editForm.monthly_limit_usd = group.monthly_limit_usd;
   editForm.carpool_members = group.carpool_members ?? 0;
-  if (editForm.carpool_members) applyCarpoolMembers(editForm, editForm.carpool_members);
+  editForm.carpool_bonus_usd = group.carpool_bonus_usd ?? DEFAULT_CARPOOL_BONUS_USD;
+  // Hydrate the saved cap unchanged; only explicit user edits should preview a new quota.
   editForm.long_context_pricing_enabled =
     group.long_context_pricing_enabled ?? true;
   editForm.force_openai_fast = group.force_openai_fast ?? false;
@@ -6259,6 +6290,8 @@ const closeEditModal = () => {
   clearAllAccountSearchState();
   showEditModal.value = false;
   editingGroup.value = null;
+  editForm.carpool_members = 0;
+  editForm.carpool_bonus_usd = DEFAULT_CARPOOL_BONUS_USD;
   editForm.max_reasoning_effort = "";
   editForm.max_reasoning_effort_over_limit = reasoningEffortOverLimitDowngrade;
   editForm.reasoning_effort_mappings = [];
@@ -6296,7 +6329,8 @@ const closeEditModal = () => {
 };
 
 const handleUpdateGroup = async () => {
-  if (!editingGroup.value) return;
+  if (!editingGroup.value || submitting.value) return;
+  if (!validateCarpoolForm(editForm.carpool_bonus_usd, editCarpoolSettingsRef.value)) return;
   if (!editForm.name.trim()) {
     appStore.showError(t("admin.groups.nameRequired"));
     return;
@@ -6466,7 +6500,7 @@ const handleUpdateGroup = async () => {
     await adminAPI.groups.update(editingGroup.value.id, requestData);
     appStore.showSuccess(t("admin.groups.groupUpdated"));
     closeEditModal();
-    loadGroups();
+    await loadGroups();
   } catch (error: any) {
     appStore.showError(
       extractApiErrorMessage(error, t("admin.groups.failedToUpdate")),

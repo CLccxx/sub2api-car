@@ -38,6 +38,26 @@ func TestGroupEntityToService_PreservesMessagesDispatchModelConfig(t *testing.T)
 	require.Equal(t, group.VideoModelPrices, got.VideoModelPrices)
 }
 
+func TestGroupEntityToService_PreservesCarpoolBonusUSD(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		bonus float64
+	}{
+		{name: "default", bonus: 100},
+		{name: "custom", bonus: 125.75},
+		{name: "zero", bonus: 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := groupEntityToService(&dbent.Group{ID: 1, CarpoolMembers: 4, CarpoolBonusUsd: tt.bonus})
+			require.NotNil(t, got)
+			require.Equal(t, 4, got.CarpoolMembers)
+			require.Equal(t, tt.bonus, got.CarpoolBonusUSD)
+			require.Nil(t, got.PreviousCarpoolBonusUSD)
+			require.False(t, got.AdjustCarpoolBonus)
+		})
+	}
+}
+
 func TestAPIKeyRepository_GetByKeyForAuth_PreservesMessagesDispatchModelConfig_SQLite(t *testing.T) {
 	repo, client := newAPIKeyRepoSQLite(t)
 	ctx := context.Background()

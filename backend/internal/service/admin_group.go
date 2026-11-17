@@ -434,6 +434,14 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		subscriptionType = SubscriptionTypeStandard
 	}
 
+	carpoolBonus := DefaultCarpoolBonusUSD
+	if input.CarpoolBonusUSD != nil {
+		carpoolBonus = *input.CarpoolBonusUSD
+	}
+	if err := validateCarpoolBonus(carpoolBonus); err != nil {
+		return nil, err
+	}
+
 	// 限额字段：nil/负数 表示"无限制"，0 表示"不允许用量"，正数表示具体限额
 	dailyLimit := normalizeLimit(input.DailyLimitUSD)
 	weeklyLimit := normalizeLimit(input.WeeklyLimitUSD)
@@ -585,6 +593,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		Status:                          StatusActive,
 		SubscriptionType:                subscriptionType,
 		CarpoolMembers:                  input.CarpoolMembers,
+		CarpoolBonusUSD:                 carpoolBonus,
 		DailyLimitUSD:                   dailyLimit,
 		WeeklyLimitUSD:                  weeklyLimit,
 		MonthlyLimitUSD:                 monthlyLimit,
@@ -789,6 +798,20 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	// 渠道缓存里存了 groupID → platform 的映射，改了平台要让它失效（见函数末尾）
 	previousPlatform := group.Platform
 	previousWeeklyLimit := group.WeeklyLimitUSD
+	previousCarpoolConfig := CarpoolConfig{
+		Members: group.CarpoolMembers, Platform: group.Platform,
+		SubscriptionType: group.SubscriptionType, Status: group.Status,
+	}
+	group.PreviousCarpoolConfig = nil
+	group.PreviousCarpoolBonusUSD = nil
+	if input.CarpoolBonusUSD != nil {
+		if err := validateCarpoolBonus(*input.CarpoolBonusUSD); err != nil {
+			return nil, err
+		}
+		previousBonus := group.CarpoolBonusUSD
+		group.PreviousCarpoolBonusUSD = &previousBonus
+		group.CarpoolBonusUSD = *input.CarpoolBonusUSD
+	}
 	if input.CarpoolMembers != nil {
 		group.CarpoolMembers = *input.CarpoolMembers
 	}
@@ -1092,8 +1115,15 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 		}
 	}
 
+	if input.CarpoolBonusUSD != nil || previousCarpoolConfig.Members > 0 || group.CarpoolMembers > 0 {
+		group.PreviousCarpoolConfig = &previousCarpoolConfig
+	}
 	if err := applyCarpoolSettings(group, previousWeeklyLimit); err != nil {
 		return nil, err
+	}
+	if previousCarpoolConfig.Members > 0 && group.CarpoolMembers == 0 && input.WeeklyLimitUSD == nil {
+		// Disabling automation does not authorize replacing a concurrently refreshed cap.
+		group.PreserveCarpoolWeeklyLimit = true
 	}
 	if err := s.groupRepo.Update(ctx, group); err != nil {
 		return nil, err

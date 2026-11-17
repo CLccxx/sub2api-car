@@ -26,7 +26,7 @@ func TestCarpoolInitializationChecksCurrentDatabaseCap(t *testing.T) {
 	mock.ExpectRollback()
 	limit := 400.0
 	g := &service.Group{ID: 10, Name: "4 人车分组", Platform: service.PlatformOpenAI,
-		SubscriptionType: service.SubscriptionTypeSubscription, CarpoolMembers: 4, WeeklyLimitUSD: &limit}
+		SubscriptionType: service.SubscriptionTypeSubscription, CarpoolMembers: 4, CarpoolBonusUSD: 100, WeeklyLimitUSD: &limit}
 	err = newGroupRepositoryWithSQL(client, nil).Update(context.Background(), g)
 	require.Error(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -43,18 +43,45 @@ func TestCarpoolInitializationConflictRequiresRefresh(t *testing.T) {
 	defer func() { _ = client.Close() }()
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE "groups"`).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectQuery(`SELECT EXISTS`).WithArgs(int64(10), float64(0)).
+	mock.ExpectQuery(`SELECT EXISTS`).WithArgs(int64(10), float64(0), float64(100)).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectRollback()
 	limit := 400.0
 	err = newGroupRepositoryWithSQL(client, nil).Update(context.Background(), &service.Group{
 		ID: 10, Name: "4 人车分组", Platform: service.PlatformOpenAI, SubscriptionType: service.SubscriptionTypeSubscription,
-		CarpoolMembers: 4, WeeklyLimitUSD: &limit,
+		CarpoolMembers: 4, CarpoolBonusUSD: 100, WeeklyLimitUSD: &limit,
 	})
 	require.Error(t, err)
 	require.Equal(t, 409, infraerrors.Code(err), "%v", err)
 	require.Equal(t, "CARPOOL_QUOTA_CHANGED", infraerrors.Reason(err))
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCarpoolBonusUpdateUsesLatestCapAndGuardsConfiguration(t *testing.T) {
+	var captured string
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(captureEntQueryMatcher{actual: &captured}))
+	require.NoError(t, err)
+	client := dbent.NewClient(dbent.Driver(entsql.OpenDB(dialect.Postgres, db)))
+	defer func() { _ = client.Close() }()
+	mock.ExpectBegin()
+	mock.ExpectExec("update").WillReturnError(errors.New("stop after captured update"))
+	mock.ExpectRollback()
+	oldBonus := 100.0
+	limit := 495.0
+	err = newGroupRepositoryWithSQL(client, nil).Update(context.Background(), &service.Group{
+		ID: 10, Name: "4 人车分组", Platform: service.PlatformOpenAI, SubscriptionType: service.SubscriptionTypeSubscription,
+		CarpoolMembers: 4, CarpoolBonusUSD: 150, PreviousCarpoolBonusUSD: &oldBonus,
+		WeeklyLimitUSD: &limit, PreserveCarpoolWeeklyLimit: true, AdjustCarpoolBonus: true,
+	})
+	require.Error(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+	parts := strings.Split(captured, "WHERE")
+	require.Len(t, parts, 2)
+	require.Contains(t, parts[0], `"weekly_limit_usd" = COALESCE("groups"."weekly_limit_usd", 0) +`)
+	require.Contains(t, parts[0], `"carpool_bonus_usd" =`)
+	require.Contains(t, parts[1], `"carpool_bonus_usd" =`)
+	require.Contains(t, parts[1], `"weekly_limit_usd" >`)
+	require.NotContains(t, captured, "carpool_quota_synced_at")
 }
 
 func TestCarpoolExistingCapIsOmittedFromAdminUpdate(t *testing.T) {
@@ -69,9 +96,10 @@ func TestCarpoolExistingCapIsOmittedFromAdminUpdate(t *testing.T) {
 	limit := 325.0
 	err = newGroupRepositoryWithSQL(client, nil).Update(context.Background(), &service.Group{
 		ID: 10, Name: "4 人车分组", Platform: service.PlatformOpenAI, SubscriptionType: service.SubscriptionTypeSubscription,
-		CarpoolMembers: 4, WeeklyLimitUSD: &limit, PreserveCarpoolWeeklyLimit: true,
+		CarpoolMembers: 4, CarpoolBonusUSD: 100, WeeklyLimitUSD: &limit, PreserveCarpoolWeeklyLimit: true,
 	})
 	require.Error(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
 	require.NotContains(t, captured, "weekly_limit_usd")
+	require.NotContains(t, captured, "carpool_bonus_usd", "omitted bonus must not overwrite a concurrent edit")
 }

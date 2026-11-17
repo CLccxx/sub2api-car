@@ -134,6 +134,12 @@ func TestDuplicateGroupCopiesConfigurationDeeplyAndResetsRuntimeState(t *testing
 		Status:                       StatusActive,
 		Hydrated:                     true,
 		SubscriptionType:             SubscriptionTypeSubscription,
+		CarpoolMembers:               4,
+		CarpoolBonusUSD:              125.75,
+		CarpoolQuotaSyncedAt:         &createdAt,
+		PreviousCarpoolBonusUSD:      groupDuplicateTestPointer(100.0),
+		AdjustCarpoolBonus:           true,
+		PreserveCarpoolWeeklyLimit:   true,
 		DailyLimitUSD:                groupDuplicateTestPointer(11.0),
 		WeeklyLimitUSD:               groupDuplicateTestPointer(22.0),
 		MonthlyLimitUSD:              groupDuplicateTestPointer(33.0),
@@ -209,6 +215,12 @@ func TestDuplicateGroupCopiesConfigurationDeeplyAndResetsRuntimeState(t *testing
 	require.Equal(t, source.RateMultiplier, duplicate.RateMultiplier)
 	require.Equal(t, source.PeakRateMultiplier, duplicate.PeakRateMultiplier)
 	require.Equal(t, source.DefaultValidityDays, duplicate.DefaultValidityDays)
+	require.Equal(t, source.CarpoolMembers, duplicate.CarpoolMembers)
+	require.Equal(t, source.CarpoolBonusUSD, duplicate.CarpoolBonusUSD)
+	require.Nil(t, duplicate.CarpoolQuotaSyncedAt)
+	require.Nil(t, duplicate.PreviousCarpoolBonusUSD)
+	require.False(t, duplicate.AdjustCarpoolBonus)
+	require.False(t, duplicate.PreserveCarpoolWeeklyLimit)
 	require.Equal(t, source.ImagePrice4K, duplicate.ImagePrice4K)
 	require.Equal(t, source.VideoModelPrices, duplicate.VideoModelPrices)
 	require.Equal(t, source.WebSearchPricePerCall, duplicate.WebSearchPricePerCall)
@@ -245,6 +257,21 @@ func TestDuplicateGroupCopiesConfigurationDeeplyAndResetsRuntimeState(t *testing
 	require.Equal(t, "gpt-5.4", source.ModelAllowlist.Models[0])
 	require.Equal(t, "xhigh", source.ReasoningEffortMappings[0].To)
 	require.Equal(t, 11.0, *source.DailyLimitUSD)
+}
+
+func TestCloneGroupForDuplicatePreservesZeroCarpoolBonusUSD(t *testing.T) {
+	source := &Group{
+		Name:             "no bonus",
+		Platform:         PlatformOpenAI,
+		SubscriptionType: SubscriptionTypeSubscription,
+		CarpoolMembers:   4,
+		CarpoolBonusUSD:  0,
+	}
+
+	duplicate := cloneGroupForDuplicate(source, "copy-with-zero-bonus")
+
+	require.Equal(t, source.CarpoolMembers, duplicate.CarpoolMembers)
+	require.Zero(t, duplicate.CarpoolBonusUSD, "an explicit zero must not become the default bonus")
 }
 
 func TestDuplicateGroupRecoversSameOperationAndScopesByAdmin(t *testing.T) {

@@ -54,6 +54,8 @@ type Group struct {
 	SubscriptionType string `json:"subscription_type,omitempty"`
 	// CarpoolMembers holds the value of the "carpool_members" field.
 	CarpoolMembers int `json:"carpool_members,omitempty"`
+	// CarpoolBonusUsd holds the value of the "carpool_bonus_usd" field.
+	CarpoolBonusUsd float64 `json:"carpool_bonus_usd,omitempty"`
 	// CarpoolQuotaSyncedAt holds the value of the "carpool_quota_synced_at" field.
 	CarpoolQuotaSyncedAt *time.Time `json:"carpool_quota_synced_at,omitempty"`
 	// DailyLimitUsd holds the value of the "daily_limit_usd" field.
@@ -270,7 +272,7 @@ func (*Group) scanValues(columns []string) ([]any, error) {
 			values[i] = new([]byte)
 		case group.FieldPeakRateEnabled, group.FieldIsExclusive, group.FieldAllowImageGeneration, group.FieldAllowBatchImageGeneration, group.FieldImageCountBilling, group.FieldImageRateIndependent, group.FieldVideoRateIndependent, group.FieldLongContextPricingEnabled, group.FieldClaudeCodeOnly, group.FieldModelRoutingEnabled, group.FieldMcpXMLInject, group.FieldAllowMessagesDispatch, group.FieldAllowLive, group.FieldForceOpenaiFast, group.FieldFreeOpenaiFast, group.FieldRequireOauthOnly, group.FieldRequirePrivacySet, group.FieldProfitControlEnabled:
 			values[i] = new(sql.NullBool)
-		case group.FieldRateMultiplier, group.FieldPeakRateMultiplier, group.FieldDailyLimitUsd, group.FieldWeeklyLimitUsd, group.FieldMonthlyLimitUsd, group.FieldImageRateMultiplier, group.FieldImagePrice1k, group.FieldImagePrice2k, group.FieldImagePrice4k, group.FieldBatchImageDiscountMultiplier, group.FieldBatchImageHoldMultiplier, group.FieldVideoRateMultiplier, group.FieldVideoPrice480p, group.FieldVideoPrice720p, group.FieldVideoPrice1080p, group.FieldWebSearchPricePerCall, group.FieldSearchPricePer1k, group.FieldAudioRealtimePricePerMin, group.FieldAudioTtsPricePerMillionChars, group.FieldAudioSttPricePerHour, group.FieldProfitMinMargin, group.FieldProfitSafetyBuffer:
+		case group.FieldRateMultiplier, group.FieldPeakRateMultiplier, group.FieldCarpoolBonusUsd, group.FieldDailyLimitUsd, group.FieldWeeklyLimitUsd, group.FieldMonthlyLimitUsd, group.FieldImageRateMultiplier, group.FieldImagePrice1k, group.FieldImagePrice2k, group.FieldImagePrice4k, group.FieldBatchImageDiscountMultiplier, group.FieldBatchImageHoldMultiplier, group.FieldVideoRateMultiplier, group.FieldVideoPrice480p, group.FieldVideoPrice720p, group.FieldVideoPrice1080p, group.FieldWebSearchPricePerCall, group.FieldSearchPricePer1k, group.FieldAudioRealtimePricePerMin, group.FieldAudioTtsPricePerMillionChars, group.FieldAudioSttPricePerHour, group.FieldProfitMinMargin, group.FieldProfitSafetyBuffer:
 			values[i] = new(sql.NullFloat64)
 		case group.FieldID, group.FieldCarpoolMembers, group.FieldDefaultValidityDays, group.FieldFallbackGroupID, group.FieldFallbackGroupIDOnInvalidRequest, group.FieldSortOrder, group.FieldRpmLimit:
 			values[i] = new(sql.NullInt64)
@@ -405,6 +407,12 @@ func (_m *Group) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field carpool_members", values[i])
 			} else if value.Valid {
 				_m.CarpoolMembers = int(value.Int64)
+			}
+		case group.FieldCarpoolBonusUsd:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field carpool_bonus_usd", values[i])
+			} else if value.Valid {
+				_m.CarpoolBonusUsd = value.Float64
 			}
 		case group.FieldCarpoolQuotaSyncedAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
@@ -889,6 +897,9 @@ func (_m *Group) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("carpool_members=")
 	builder.WriteString(fmt.Sprintf("%v", _m.CarpoolMembers))
+	builder.WriteString(", ")
+	builder.WriteString("carpool_bonus_usd=")
+	builder.WriteString(fmt.Sprintf("%v", _m.CarpoolBonusUsd))
 	builder.WriteString(", ")
 	if v := _m.CarpoolQuotaSyncedAt; v != nil {
 		builder.WriteString("carpool_quota_synced_at=")

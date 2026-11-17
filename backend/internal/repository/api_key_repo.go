@@ -993,6 +993,7 @@ func groupEntityToService(g *dbent.Group) *service.Group {
 		DailyLimitUSD:                   g.DailyLimitUsd,
 		WeeklyLimitUSD:                  g.WeeklyLimitUsd,
 		CarpoolMembers:                  g.CarpoolMembers,
+		CarpoolBonusUSD:                 g.CarpoolBonusUsd,
 		CarpoolQuotaSyncedAt:            g.CarpoolQuotaSyncedAt,
 		MonthlyLimitUSD:                 g.MonthlyLimitUsd,
 		AllowImageGeneration:            g.AllowImageGeneration,

@@ -264,6 +264,27 @@ func (_u *GroupUpdate) AddCarpoolMembers(v int) *GroupUpdate {
 	return _u
 }
 
+// SetCarpoolBonusUsd sets the "carpool_bonus_usd" field.
+func (_u *GroupUpdate) SetCarpoolBonusUsd(v float64) *GroupUpdate {
+	_u.mutation.ResetCarpoolBonusUsd()
+	_u.mutation.SetCarpoolBonusUsd(v)
+	return _u
+}
+
+// SetNillableCarpoolBonusUsd sets the "carpool_bonus_usd" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableCarpoolBonusUsd(v *float64) *GroupUpdate {
+	if v != nil {
+		_u.SetCarpoolBonusUsd(*v)
+	}
+	return _u
+}
+
+// AddCarpoolBonusUsd adds value to the "carpool_bonus_usd" field.
+func (_u *GroupUpdate) AddCarpoolBonusUsd(v float64) *GroupUpdate {
+	_u.mutation.AddCarpoolBonusUsd(v)
+	return _u
+}
+
 // SetCarpoolQuotaSyncedAt sets the "carpool_quota_synced_at" field.
 func (_u *GroupUpdate) SetCarpoolQuotaSyncedAt(v time.Time) *GroupUpdate {
 	_u.mutation.SetCarpoolQuotaSyncedAt(v)
@@ -1574,6 +1595,11 @@ func (_u *GroupUpdate) check() error {
 			return &ValidationError{Name: "subscription_type", err: fmt.Errorf(`ent: validator failed for field "Group.subscription_type": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.CarpoolBonusUsd(); ok {
+		if err := group.CarpoolBonusUsdValidator(v); err != nil {
+			return &ValidationError{Name: "carpool_bonus_usd", err: fmt.Errorf(`ent: validator failed for field "Group.carpool_bonus_usd": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.SearchPricePer1k(); ok {
 		if err := group.SearchPricePer1kValidator(v); err != nil {
 			return &ValidationError{Name: "search_price_per_1k", err: fmt.Errorf(`ent: validator failed for field "Group.search_price_per_1k": %w`, err)}
@@ -1686,6 +1712,12 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.AddedCarpoolMembers(); ok {
 		_spec.AddField(group.FieldCarpoolMembers, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.CarpoolBonusUsd(); ok {
+		_spec.SetField(group.FieldCarpoolBonusUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedCarpoolBonusUsd(); ok {
+		_spec.AddField(group.FieldCarpoolBonusUsd, field.TypeFloat64, value)
 	}
 	if value, ok := _u.mutation.CarpoolQuotaSyncedAt(); ok {
 		_spec.SetField(group.FieldCarpoolQuotaSyncedAt, field.TypeTime, value)
@@ -2534,6 +2566,27 @@ func (_u *GroupUpdateOne) SetNillableCarpoolMembers(v *int) *GroupUpdateOne {
 // AddCarpoolMembers adds value to the "carpool_members" field.
 func (_u *GroupUpdateOne) AddCarpoolMembers(v int) *GroupUpdateOne {
 	_u.mutation.AddCarpoolMembers(v)
+	return _u
+}
+
+// SetCarpoolBonusUsd sets the "carpool_bonus_usd" field.
+func (_u *GroupUpdateOne) SetCarpoolBonusUsd(v float64) *GroupUpdateOne {
+	_u.mutation.ResetCarpoolBonusUsd()
+	_u.mutation.SetCarpoolBonusUsd(v)
+	return _u
+}
+
+// SetNillableCarpoolBonusUsd sets the "carpool_bonus_usd" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableCarpoolBonusUsd(v *float64) *GroupUpdateOne {
+	if v != nil {
+		_u.SetCarpoolBonusUsd(*v)
+	}
+	return _u
+}
+
+// AddCarpoolBonusUsd adds value to the "carpool_bonus_usd" field.
+func (_u *GroupUpdateOne) AddCarpoolBonusUsd(v float64) *GroupUpdateOne {
+	_u.mutation.AddCarpoolBonusUsd(v)
 	return _u
 }
 
@@ -3860,6 +3913,11 @@ func (_u *GroupUpdateOne) check() error {
 			return &ValidationError{Name: "subscription_type", err: fmt.Errorf(`ent: validator failed for field "Group.subscription_type": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.CarpoolBonusUsd(); ok {
+		if err := group.CarpoolBonusUsdValidator(v); err != nil {
+			return &ValidationError{Name: "carpool_bonus_usd", err: fmt.Errorf(`ent: validator failed for field "Group.carpool_bonus_usd": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.SearchPricePer1k(); ok {
 		if err := group.SearchPricePer1kValidator(v); err != nil {
 			return &ValidationError{Name: "search_price_per_1k", err: fmt.Errorf(`ent: validator failed for field "Group.search_price_per_1k": %w`, err)}
@@ -3989,6 +4047,12 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if value, ok := _u.mutation.AddedCarpoolMembers(); ok {
 		_spec.AddField(group.FieldCarpoolMembers, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.CarpoolBonusUsd(); ok {
+		_spec.SetField(group.FieldCarpoolBonusUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedCarpoolBonusUsd(); ok {
+		_spec.AddField(group.FieldCarpoolBonusUsd, field.TypeFloat64, value)
 	}
 	if value, ok := _u.mutation.CarpoolQuotaSyncedAt(); ok {
 		_spec.SetField(group.FieldCarpoolQuotaSyncedAt, field.TypeTime, value)

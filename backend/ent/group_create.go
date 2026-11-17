@@ -252,6 +252,20 @@ func (_c *GroupCreate) SetNillableCarpoolMembers(v *int) *GroupCreate {
 	return _c
 }
 
+// SetCarpoolBonusUsd sets the "carpool_bonus_usd" field.
+func (_c *GroupCreate) SetCarpoolBonusUsd(v float64) *GroupCreate {
+	_c.mutation.SetCarpoolBonusUsd(v)
+	return _c
+}
+
+// SetNillableCarpoolBonusUsd sets the "carpool_bonus_usd" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableCarpoolBonusUsd(v *float64) *GroupCreate {
+	if v != nil {
+		_c.SetCarpoolBonusUsd(*v)
+	}
+	return _c
+}
+
 // SetCarpoolQuotaSyncedAt sets the "carpool_quota_synced_at" field.
 func (_c *GroupCreate) SetCarpoolQuotaSyncedAt(v time.Time) *GroupCreate {
 	_c.mutation.SetCarpoolQuotaSyncedAt(v)
@@ -1139,6 +1153,10 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultCarpoolMembers
 		_c.mutation.SetCarpoolMembers(v)
 	}
+	if _, ok := _c.mutation.CarpoolBonusUsd(); !ok {
+		v := group.DefaultCarpoolBonusUsd
+		_c.mutation.SetCarpoolBonusUsd(v)
+	}
 	if _, ok := _c.mutation.DefaultValidityDays(); !ok {
 		v := group.DefaultDefaultValidityDays
 		_c.mutation.SetDefaultValidityDays(v)
@@ -1352,6 +1370,14 @@ func (_c *GroupCreate) check() error {
 	}
 	if _, ok := _c.mutation.CarpoolMembers(); !ok {
 		return &ValidationError{Name: "carpool_members", err: errors.New(`ent: missing required field "Group.carpool_members"`)}
+	}
+	if _, ok := _c.mutation.CarpoolBonusUsd(); !ok {
+		return &ValidationError{Name: "carpool_bonus_usd", err: errors.New(`ent: missing required field "Group.carpool_bonus_usd"`)}
+	}
+	if v, ok := _c.mutation.CarpoolBonusUsd(); ok {
+		if err := group.CarpoolBonusUsdValidator(v); err != nil {
+			return &ValidationError{Name: "carpool_bonus_usd", err: fmt.Errorf(`ent: validator failed for field "Group.carpool_bonus_usd": %w`, err)}
+		}
 	}
 	if _, ok := _c.mutation.DefaultValidityDays(); !ok {
 		return &ValidationError{Name: "default_validity_days", err: errors.New(`ent: missing required field "Group.default_validity_days"`)}
@@ -1581,6 +1607,10 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.CarpoolMembers(); ok {
 		_spec.SetField(group.FieldCarpoolMembers, field.TypeInt, value)
 		_node.CarpoolMembers = value
+	}
+	if value, ok := _c.mutation.CarpoolBonusUsd(); ok {
+		_spec.SetField(group.FieldCarpoolBonusUsd, field.TypeFloat64, value)
+		_node.CarpoolBonusUsd = value
 	}
 	if value, ok := _c.mutation.CarpoolQuotaSyncedAt(); ok {
 		_spec.SetField(group.FieldCarpoolQuotaSyncedAt, field.TypeTime, value)
@@ -2157,6 +2187,24 @@ func (u *GroupUpsert) UpdateCarpoolMembers() *GroupUpsert {
 // AddCarpoolMembers adds v to the "carpool_members" field.
 func (u *GroupUpsert) AddCarpoolMembers(v int) *GroupUpsert {
 	u.Add(group.FieldCarpoolMembers, v)
+	return u
+}
+
+// SetCarpoolBonusUsd sets the "carpool_bonus_usd" field.
+func (u *GroupUpsert) SetCarpoolBonusUsd(v float64) *GroupUpsert {
+	u.Set(group.FieldCarpoolBonusUsd, v)
+	return u
+}
+
+// UpdateCarpoolBonusUsd sets the "carpool_bonus_usd" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateCarpoolBonusUsd() *GroupUpsert {
+	u.SetExcluded(group.FieldCarpoolBonusUsd)
+	return u
+}
+
+// AddCarpoolBonusUsd adds v to the "carpool_bonus_usd" field.
+func (u *GroupUpsert) AddCarpoolBonusUsd(v float64) *GroupUpsert {
+	u.Add(group.FieldCarpoolBonusUsd, v)
 	return u
 }
 
@@ -3356,6 +3404,27 @@ func (u *GroupUpsertOne) AddCarpoolMembers(v int) *GroupUpsertOne {
 func (u *GroupUpsertOne) UpdateCarpoolMembers() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateCarpoolMembers()
+	})
+}
+
+// SetCarpoolBonusUsd sets the "carpool_bonus_usd" field.
+func (u *GroupUpsertOne) SetCarpoolBonusUsd(v float64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetCarpoolBonusUsd(v)
+	})
+}
+
+// AddCarpoolBonusUsd adds v to the "carpool_bonus_usd" field.
+func (u *GroupUpsertOne) AddCarpoolBonusUsd(v float64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddCarpoolBonusUsd(v)
+	})
+}
+
+// UpdateCarpoolBonusUsd sets the "carpool_bonus_usd" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateCarpoolBonusUsd() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateCarpoolBonusUsd()
 	})
 }
 
@@ -4872,6 +4941,27 @@ func (u *GroupUpsertBulk) AddCarpoolMembers(v int) *GroupUpsertBulk {
 func (u *GroupUpsertBulk) UpdateCarpoolMembers() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateCarpoolMembers()
+	})
+}
+
+// SetCarpoolBonusUsd sets the "carpool_bonus_usd" field.
+func (u *GroupUpsertBulk) SetCarpoolBonusUsd(v float64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetCarpoolBonusUsd(v)
+	})
+}
+
+// AddCarpoolBonusUsd adds v to the "carpool_bonus_usd" field.
+func (u *GroupUpsertBulk) AddCarpoolBonusUsd(v float64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddCarpoolBonusUsd(v)
+	})
+}
+
+// UpdateCarpoolBonusUsd sets the "carpool_bonus_usd" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateCarpoolBonusUsd() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateCarpoolBonusUsd()
 	})
 }
 

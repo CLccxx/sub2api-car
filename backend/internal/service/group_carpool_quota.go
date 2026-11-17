@@ -19,6 +19,7 @@ const (
 type CarpoolQuotaTarget struct {
 	GroupID  int64
 	Members  int
+	BonusUSD float64
 	Revision time.Time
 }
 
@@ -187,7 +188,7 @@ func (s *CarpoolQuotaService) refresh(ctx context.Context, target CarpoolQuotaTa
 		window == nil || window.EstimatedTotalCost == nil || window.ResetsAt == nil || !window.ResetsAt.After(now) || window.ResetsAt.After(now.Add(7*24*time.Hour+time.Minute)) {
 		return
 	}
-	limit, ok := carpoolWeeklyLimit(*window.EstimatedTotalCost, target.Members)
+	limit, ok := carpoolWeeklyLimit(*window.EstimatedTotalCost, target.Members, target.BonusUSD)
 	if !ok {
 		return
 	}

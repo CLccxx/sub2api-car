@@ -186,6 +186,7 @@ func sanitizeUpdateGroupRequestForSimpleMode(req *UpdateGroupRequest) {
 // CreateGroupRequest represents create group request
 type CreateGroupRequest struct {
 	CarpoolMembers            int                           `json:"carpool_members"`
+	CarpoolBonusUSD           *float64                      `json:"carpool_bonus_usd" binding:"omitempty,gte=0,lte=10000000000"`
 	Name                      string                        `json:"name" binding:"required"`
 	Description               string                        `json:"description"`
 	I18n                      service.GroupI18n             `json:"i18n"` // 名称与描述的界面语言译文
@@ -263,6 +264,7 @@ type CreateGroupRequest struct {
 // UpdateGroupRequest represents update group request
 type UpdateGroupRequest struct {
 	CarpoolMembers            *int                           `json:"carpool_members"`
+	CarpoolBonusUSD           *float64                       `json:"carpool_bonus_usd" binding:"omitempty,gte=0,lte=10000000000"`
 	Name                      string                         `json:"name"`
 	Description               *string                        `json:"description"`
 	I18n                      *service.GroupI18n             `json:"i18n"` // 缺省不修改，传入则整体替换
@@ -680,6 +682,7 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		SubscriptionType:                req.SubscriptionType,
 		DailyLimitUSD:                   req.DailyLimitUSD.ToServiceInput(),
 		CarpoolMembers:                  req.CarpoolMembers,
+		CarpoolBonusUSD:                 req.CarpoolBonusUSD,
 		WeeklyLimitUSD:                  req.WeeklyLimitUSD.ToServiceInput(),
 		MonthlyLimitUSD:                 req.MonthlyLimitUSD.ToServiceInput(),
 		LongContextPricingEnabled:       req.LongContextPricingEnabled,
@@ -829,6 +832,7 @@ func (h *GroupHandler) Update(c *gin.Context) {
 		SubscriptionType:                req.SubscriptionType,
 		DailyLimitUSD:                   req.DailyLimitUSD.ToServiceInput(),
 		CarpoolMembers:                  req.CarpoolMembers,
+		CarpoolBonusUSD:                 req.CarpoolBonusUSD,
 		WeeklyLimitUSD:                  req.WeeklyLimitUSD.ToServiceInput(),
 		MonthlyLimitUSD:                 req.MonthlyLimitUSD.ToServiceInput(),
 		LongContextPricingEnabled:       req.LongContextPricingEnabled,

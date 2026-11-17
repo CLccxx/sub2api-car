@@ -238,6 +238,7 @@ type AdminBoundAuthIdentityChannel struct {
 
 type CreateGroupInput struct {
 	CarpoolMembers            int
+	CarpoolBonusUSD           *float64 // nil uses the default; zero explicitly disables the bonus.
 	Name                      string
 	Description               string
 	I18n                      GroupI18n // 名称与描述的界面语言译文
@@ -321,6 +322,7 @@ type CreateGroupInput struct {
 
 type UpdateGroupInput struct {
 	CarpoolMembers            *int
+	CarpoolBonusUSD           *float64 // nil leaves the configured bonus unchanged.
 	Name                      string
 	Description               *string
 	I18n                      *GroupI18n // nil 表示不修改；非 nil 整体替换
