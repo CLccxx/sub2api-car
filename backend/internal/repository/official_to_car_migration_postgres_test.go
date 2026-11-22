@@ -6,12 +6,10 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"fmt"
-	"io/fs"
 	"net/url"
 	"os"
 	"strings"
 	"testing"
-	"testing/fstest"
 	"time"
 
 	"entgo.io/ent/dialect"
@@ -138,37 +136,24 @@ func assertCarMigrationBeforeOfficial021(t *testing.T, pending map[string]bool) 
 
 func assertCarMigrationPreservesData(t *testing.T, pending map[string]bool) {
 	t.Helper()
-	// These historical releases predate the bonus/trading additions and official
-	// 0.2.22. Exclude by full filename, not numeric prefix: all three 251 files
-	// coexist, and treating an upstream 251 as historical builds the wrong DB.
-	pending["251_custom_group_carpool_bonus.sql"] = true
-	pending["252_custom_carpool_quota_trades.sql"] = true
-	pending["253_custom_carpool_quota_trade_price.sql"] = true
-	pending["251_group_force_openai_ultrafast.sql"] = true
-	pending["251_group_usage_rollup_nonblocking_build.sql"] = true
+	// These historical releases predate the bonus/trading additions and the
+	// official 0.2.22/0.2.24 migrations. Both 251 and 252 have shared prefixes.
+	pending[car022BonusMigration] = true
+	pending[car022TradesMigration] = true
+	pending[car022PriceMigration] = true
+	pending[car022UltrafastMigration] = true
+	pending[car022RollupMigration] = true
+	pending[ultrafastPricingMigration] = true
 	db := officialToCarTestDB(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	baseline := fstest.MapFS{}
-	files, err := fs.Glob(migrations.FS, "*.sql")
-	require.NoError(t, err)
-	for _, name := range files {
-		content, err := migrations.FS.ReadFile(name)
-		require.NoError(t, err)
-		if !pending[name] {
-			baseline[name] = &fstest.MapFile{Data: content}
-		}
-	}
-	for name := range pending {
-		_, err := migrations.FS.ReadFile(name)
-		require.NoError(t, err, "the upgrade must include %s", name)
-	}
+	baseline, files := migrationFixtureFS(t, pending)
 	require.NoError(t, applyMigrationsFS(ctx, db, baseline), "create previous schema from unmodified SQL")
 
 	// All credentials are inert fixtures. This test starts no application or
 	// background workers and cannot refresh an upstream OAuth token.
-	_, err = db.ExecContext(ctx, `
+	_, err := db.ExecContext(ctx, `
 		INSERT INTO users (id,email,password_hash,username,balance,role,totp_enabled,totp_secret_encrypted,totp_enabled_at)
 		VALUES (9001,'owner@example.invalid','$2a$10$fixture-password-hash','existing-owner',123.45678901,'admin',true,'fixture-encrypted-totp','2026-10-01T00:00:00Z');
 		INSERT INTO groups (id,name,platform,subscription_type,weekly_limit_usd,rate_multiplier)

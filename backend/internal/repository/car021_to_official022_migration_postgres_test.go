@@ -18,11 +18,12 @@ import (
 )
 
 const (
-	car022BonusMigration     = "251_custom_group_carpool_bonus.sql"
-	car022TradesMigration    = "252_custom_carpool_quota_trades.sql"
-	car022PriceMigration     = "253_custom_carpool_quota_trade_price.sql"
-	car022UltrafastMigration = "251_group_force_openai_ultrafast.sql"
-	car022RollupMigration    = "251_group_usage_rollup_nonblocking_build.sql"
+	car022BonusMigration      = "251_custom_group_carpool_bonus.sql"
+	car022TradesMigration     = "252_custom_carpool_quota_trades.sql"
+	car022PriceMigration      = "253_custom_carpool_quota_trade_price.sql"
+	car022UltrafastMigration  = "251_group_force_openai_ultrafast.sql"
+	car022RollupMigration     = "251_group_usage_rollup_nonblocking_build.sql"
+	ultrafastPricingMigration = "252_channel_pricing_ultrafast_multiplier.sql"
 )
 
 // Pin both exact bytes (including whitespace) and the runner's TrimSpace SHA256.
@@ -37,9 +38,8 @@ func TestCar021ToOfficial022PublishedMigrationBytes(t *testing.T) {
 	assertCar022PublishedMigrationBytes(t)
 }
 
-func assertCar022PublishedMigrationBytes(t *testing.T) {
-	t.Helper()
-	custom := map[string]bool{
+func carCustomMigrations() map[string]bool {
+	return map[string]bool{
 		"237_custom_group_carpool.sql":          true,
 		"238_custom_carpool_reset_monitor.sql":  true,
 		"241_custom_quota_reset_operations.sql": true,
@@ -50,40 +50,66 @@ func assertCar022PublishedMigrationBytes(t *testing.T) {
 		car022TradesMigration:                   true,
 		car022PriceMigration:                    true,
 	}
+}
+
+func assertCar022PublishedMigrationBytes(t *testing.T) {
+	t.Helper()
+	pending := map[string]bool{
+		car022UltrafastMigration: true, car022RollupMigration: true, ultrafastPricingMigration: true,
+	}
+	car, _ := migrationFixtureFS(t, pending)
+	for name := range carCustomMigrations() {
+		pending[name] = true
+	}
+	official, _ := migrationFixtureFS(t, pending)
+	assertMigrationFixtureManifest(t, official, "official v0.2.21", 302,
+		"02ca8c89c930c09884362eb87cd002d72baffd1b9732c548a0fe4c0d75f5fcad",
+		"84fe057f785f91dfe593a3da6d28d0bb7d38d96fb2e09329d849cb920e12f8fe")
+	assertMigrationFixtureManifest(t, car, "v0.2.21-car.6", 311,
+		"326212e4d5a2bafc6c82782d494ab386b4ca0672974e7fc94ae1f7bef214a160",
+		"94bacccef8a860f8ed043952ff630392437a31923176d5c6dc14d0f6d3d1857e")
+}
+
+func assertMigrationFixtureManifest(t *testing.T, fixture fstest.MapFS, release string, count int, rawDigest, checksumDigest string) {
+	t.Helper()
+	require.Len(t, fixture, count, "%s SQL set must stay intact", release)
+	names := make([]string, 0, len(fixture))
+	for name := range fixture {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var raw, checksums strings.Builder
+	for _, name := range names {
+		content := fixture[name].Data
+		_, _ = fmt.Fprintf(&raw, "%s\t%x\n", name, sha256.Sum256(content))
+		_, _ = fmt.Fprintf(&checksums, "%s\t%x\n", name, sha256.Sum256([]byte(strings.TrimSpace(string(content)))))
+	}
+	require.Equal(t, rawDigest, fmt.Sprintf("%x", sha256.Sum256([]byte(raw.String()))), "%s bytes", release)
+	require.Equal(t, checksumDigest, fmt.Sprintf("%x", sha256.Sum256([]byte(checksums.String()))), "%s checksums", release)
+}
+
+// migrationFixtureFS reconstructs a source release from embedded SQL without
+// rewriting any file. Exclusions must be full filenames, not numeric prefixes.
+func migrationFixtureFS(t *testing.T, pending map[string]bool) (fstest.MapFS, []string) {
+	t.Helper()
 	files, err := fs.Glob(migrations.FS, "*.sql")
 	require.NoError(t, err)
-	sort.Strings(files)
-	var officialRaw, officialChecksums, carRaw, carChecksums strings.Builder
-	var officialCount, carCount int
+	baseline := fstest.MapFS{}
 	for _, name := range files {
-		if name == car022UltrafastMigration || name == car022RollupMigration {
+		if pending[name] {
 			continue
 		}
 		content, err := migrations.FS.ReadFile(name)
 		require.NoError(t, err)
-		raw := fmt.Sprintf("%s\t%x\n", name, sha256.Sum256(content))
-		checksum := fmt.Sprintf("%s\t%x\n", name, sha256.Sum256([]byte(strings.TrimSpace(string(content)))))
-		_, _ = carRaw.WriteString(raw)
-		_, _ = carChecksums.WriteString(checksum)
-		carCount++
-		if !custom[name] {
-			_, _ = officialRaw.WriteString(raw)
-			_, _ = officialChecksums.WriteString(checksum)
-			officialCount++
+		baseline[name] = &fstest.MapFile{Data: content}
+	}
+	for name, isPending := range pending {
+		if isPending {
+			_, err := migrations.FS.ReadFile(name)
+			require.NoError(t, err, "the upgrade must include %s", name)
 		}
 	}
-	require.Equal(t, 302, officialCount, "official 0.2.21 SQL set must stay intact")
-	require.Equal(t, 311, carCount, "car.6 SQL set must stay intact; only the two upstream 251 files are new")
-	for _, manifest := range []struct {
-		name, text, digest string
-	}{
-		{"official bytes", officialRaw.String(), "02ca8c89c930c09884362eb87cd002d72baffd1b9732c548a0fe4c0d75f5fcad"},
-		{"official checksums", officialChecksums.String(), "84fe057f785f91dfe593a3da6d28d0bb7d38d96fb2e09329d849cb920e12f8fe"},
-		{"car.6 bytes", carRaw.String(), "326212e4d5a2bafc6c82782d494ab386b4ca0672974e7fc94ae1f7bef214a160"},
-		{"car.6 checksums", carChecksums.String(), "94bacccef8a860f8ed043952ff630392437a31923176d5c6dc14d0f6d3d1857e"},
-	} {
-		require.Equal(t, manifest.digest, fmt.Sprintf("%x", sha256.Sum256([]byte(manifest.text))), manifest.name)
-	}
+	return baseline, files
 }
 
 func TestCar021ToOfficial022PostgresPreservesData(t *testing.T) {
@@ -111,17 +137,9 @@ func TestCar021ToOfficial022PostgresPreservesData(t *testing.T) {
 			pending := map[string]bool{
 				car022BonusMigration: !tc.bonus, car022TradesMigration: !tc.trades, car022PriceMigration: !tc.price,
 				car022UltrafastMigration: !tc.ultrafast, car022RollupMigration: !tc.rollup,
+				ultrafastPricingMigration: true,
 			}
-			baseline := fstest.MapFS{}
-			files, err := fs.Glob(migrations.FS, "*.sql")
-			require.NoError(t, err)
-			for _, name := range files {
-				content, err := migrations.FS.ReadFile(name)
-				require.NoError(t, err)
-				if !pending[name] {
-					baseline[name] = &fstest.MapFile{Data: content}
-				}
-			}
+			baseline, files := migrationFixtureFS(t, pending)
 			require.Len(t, baseline, tc.baselineCount)
 			require.NoError(t, applyMigrationsFS(ctx, db, baseline), "build source schema from unchanged released SQL")
 			for name, isPending := range pending {
@@ -217,6 +235,122 @@ func TestCar021ToOfficial022PostgresPreservesData(t *testing.T) {
 			assertCar022RollupNonblocking(t, ctx, db)
 		})
 	}
+}
+
+func TestOfficial024SyncPublishedMigrationBytes(t *testing.T) {
+	// Pinned from the release Git objects, not the merged filesystem.
+	car, files := migrationFixtureFS(t, map[string]bool{ultrafastPricingMigration: true})
+	assertMigrationFixtureManifest(t, car, "v0.2.22-car.1 (a0d0c93ec)", 313,
+		"da69ca4c7ed0712beacda60fbb751f78e28b4866bd89308e2cda533c61a15807",
+		"307505b052fe4ffe36cafc3172c6ac530f7cb543fd661361d4cc3e962ac51cab")
+	require.Len(t, files, 314, "only the approved ultrafast pricing SQL is new to car.1")
+	official, _ := migrationFixtureFS(t, carCustomMigrations())
+	assertMigrationFixtureManifest(t, official, "official v0.2.24 (7515db6dc)", 305,
+		"14ecb1a7589a712a246d738e5d91bc90d6ac1569c1fbd5006e9a1c33b3a124a6",
+		"1d018b21afba76dad43b048c39c3ee83d3f7bf3d16178d38e5d720260b7a2879")
+}
+
+func TestOfficial024SyncPostgresPreservesData(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		pending       map[string]bool
+		baselineCount int
+		isCar         bool
+	}{
+		{"v0.2.22-car.1", map[string]bool{ultrafastPricingMigration: true}, 313, true},
+		{"official-v0.2.24", carCustomMigrations(), 305, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := officialToCarTestDB(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+
+			baseline, files := migrationFixtureFS(t, tc.pending)
+			require.Len(t, baseline, tc.baselineCount)
+			require.NoError(t, applyMigrationsFS(ctx, db, baseline), "build the released source schema and ledger")
+			assertCar022ColumnPresence(t, ctx, db, "channel_model_pricing", "ultrafast_multiplier", !tc.isCar)
+			assertCar022ColumnPresence(t, ctx, db, "carpool_quota_trades", "sale_price_cents", tc.isCar)
+			var tradeViews map[string]string
+			if tc.isCar {
+				seedCar022MigrationData(t, ctx, db, true, true, true, true, true)
+				assertCar022TradeEntitlements(t, ctx, db)
+				tradeViews = car022TradeViewSnapshot(t, ctx, db)
+			}
+			seedUltrafastMigrationPricing(t, ctx, db)
+			if !tc.isCar {
+				// Official already records 252. Preserve both a configured card and an unset one.
+				_, err := db.ExecContext(ctx, `UPDATE channel_model_pricing SET ultrafast_multiplier=3.125678 WHERE id=99102`)
+				require.NoError(t, err)
+			}
+
+			sourceColumns := car022MigrationColumns(t, ctx, db)
+			sourceRows := car022MigrationSnapshot(t, ctx, db, sourceColumns)
+			historical := car022MigrationLedger(t, ctx, db)
+			require.Len(t, historical, tc.baselineCount)
+			for name := range tc.pending {
+				require.NotContains(t, historical, name, "source ledger must not include pending migrations")
+			}
+
+			require.NoError(t, ApplyMigrations(ctx, db), "upgrade to the merged migration set")
+			require.Equal(t, sourceRows, car022MigrationSnapshot(t, ctx, db, sourceColumns), "preserve all original rows and columns")
+			current := car022MigrationLedger(t, ctx, db)
+			require.Len(t, current, len(files))
+			for name, entry := range historical {
+				require.Equal(t, entry, current[name], "preserve checksum and applied_at: %s", name)
+			}
+			for _, name := range files {
+				content, err := migrations.FS.ReadFile(name)
+				require.NoError(t, err)
+				require.True(t, strings.HasPrefix(current[name], fmt.Sprintf("%x/", sha256.Sum256([]byte(strings.TrimSpace(string(content)))))), name)
+			}
+			assertCar022ColumnPresence(t, ctx, db, "carpool_quota_trades", "sale_price_cents", true)
+			if tc.isCar {
+				require.Equal(t, tradeViews, car022TradeViewSnapshot(t, ctx, db), "preserve trade cycles and entitlements")
+				assertCar022TradeEntitlements(t, ctx, db)
+			}
+
+			var unset, configured sql.NullString
+			require.NoError(t, db.QueryRowContext(ctx, `SELECT ultrafast_multiplier::text FROM channel_model_pricing WHERE id=99101`).Scan(&unset))
+			require.False(t, unset.Valid, "existing fast pricing must not imply an ultrafast price")
+			require.NoError(t, db.QueryRowContext(ctx, `SELECT ultrafast_multiplier::text FROM channel_model_pricing WHERE id=99102`).Scan(&configured))
+			if tc.isCar {
+				require.False(t, configured.Valid, "both pre-upgrade cards must start with NULL ultrafast")
+				_, err := db.ExecContext(ctx, `UPDATE channel_model_pricing SET ultrafast_multiplier=3.125678 WHERE id=99102`)
+				require.NoError(t, err, "the upgraded schema accepts a positive override")
+			}
+			for _, invalid := range []int{0, -1} {
+				_, err := db.ExecContext(ctx, `UPDATE channel_model_pricing SET ultrafast_multiplier=$1 WHERE id=99102`, invalid)
+				var pqErr *pq.Error
+				require.ErrorAs(t, err, &pqErr)
+				require.Equal(t, pq.ErrorCode("23514"), pqErr.Code)
+				require.Equal(t, "channel_model_pricing_ultrafast_multiplier_positive", pqErr.Constraint)
+			}
+			require.NoError(t, db.QueryRowContext(ctx, `SELECT ultrafast_multiplier::text FROM channel_model_pricing WHERE id=99102`).Scan(&configured))
+			require.Equal(t, sql.NullString{String: "3.125678", Valid: true}, configured, "preserve the exact positive override after rejected writes")
+
+			upgradedColumns := car022MigrationColumns(t, ctx, db)
+			upgradedRows := car022MigrationSnapshot(t, ctx, db, upgradedColumns)
+			upgradedViews := car022TradeViewSnapshot(t, ctx, db)
+			require.NoError(t, ApplyMigrations(ctx, db), "restart with the upgraded schema")
+			require.Equal(t, current, car022MigrationLedger(t, ctx, db), "restart must not change any ledger entry")
+			require.Equal(t, upgradedColumns, car022MigrationColumns(t, ctx, db), "restart must not change columns")
+			require.Equal(t, upgradedRows, car022MigrationSnapshot(t, ctx, db, upgradedColumns), "restart must preserve rows, including NULL and configured ultrafast prices")
+			require.Equal(t, upgradedViews, car022TradeViewSnapshot(t, ctx, db), "restart must preserve trade views")
+		})
+	}
+}
+
+func seedUltrafastMigrationPricing(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO channels(id,name) VALUES(99100,'Existing channel pricing');
+		INSERT INTO channel_model_pricing(id,channel_id,platform,models,input_price,fast_multiplier,flex_multiplier,reasoning_effort_multipliers,updated_at) VALUES
+		 (99101,99100,'openai','["gpt-6-astra"]',0.000012345678,2.345678,0.625,'{"high":1.125}','2026-10-30T12:00:00.123456Z'),
+		 (99102,99100,'openai','["gpt-6-sol"]',0.000023456789,NULL,NULL,'{}','2026-10-31T12:00:00.234567Z');
+		INSERT INTO channel_pricing_intervals(id,pricing_id,min_tokens,max_tokens,input_multiplier,sort_order)
+		 VALUES(99103,99101,100000,NULL,1.234567,1);
+	`)
+	require.NoError(t, err)
 }
 
 func assertCar022ColumnPresence(t *testing.T, ctx context.Context, db *sql.DB, table, column string, expected bool) {
