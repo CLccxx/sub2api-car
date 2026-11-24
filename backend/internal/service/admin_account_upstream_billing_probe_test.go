@@ -113,6 +113,111 @@ func TestUpdateAccountRoutesRateIntentThroughAtomicBillingUpdater(t *testing.T) 
 	require.Zero(t, *updated.RateMultiplier)
 }
 
+type carpoolCorrectionAdminRepo struct {
+	*upstreamBillingProbeAdminRepo
+	correctionWrites []float64
+}
+
+func (r *carpoolCorrectionAdminRepo) UpdateWithCarpoolQuotaCorrection(
+	ctx context.Context, account *Account, _, _ *bool, _ *float64, correction float64,
+) error {
+	r.correctionWrites = append(r.correctionWrites, correction)
+	if correction == 0 {
+		delete(account.Extra, CarpoolQuotaCorrectionExtraKey)
+	} else {
+		if account.Extra == nil {
+			account.Extra = make(map[string]any)
+		}
+		account.Extra[CarpoolQuotaCorrectionExtraKey] = correction
+	}
+	return r.Update(ctx, account)
+}
+
+func TestUpdateAccountCarpoolQuotaCorrectionUsesExplicitIntent(t *testing.T) {
+	ctx := context.Background()
+	account := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive}
+	repo := &carpoolCorrectionAdminRepo{upstreamBillingProbeAdminRepo: &upstreamBillingProbeAdminRepo{
+		&upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{1: account}},
+	}}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	correction := -12.34
+	updated, err := svc.UpdateAccount(ctx, 1, &UpdateAccountInput{CarpoolQuotaCorrectionUSD: &correction})
+	require.NoError(t, err)
+	require.Equal(t, correction, CarpoolQuotaCorrectionUSD(updated.Extra))
+
+	for _, extra := range []map[string]any{{}, {CarpoolQuotaCorrectionExtraKey: 99.0}} {
+		updated, err = svc.UpdateAccount(ctx, 1, &UpdateAccountInput{Extra: extra})
+		require.NoError(t, err)
+		require.Equal(t, correction, CarpoolQuotaCorrectionUSD(updated.Extra))
+	}
+
+	zero := 0.0
+	updated, err = svc.UpdateAccount(ctx, 1, &UpdateAccountInput{
+		CarpoolQuotaCorrectionUSD: &zero,
+		Extra:                     map[string]any{CarpoolQuotaCorrectionExtraKey: 99.0},
+	})
+	require.NoError(t, err)
+	require.NotContains(t, updated.Extra, CarpoolQuotaCorrectionExtraKey)
+	require.Equal(t, []float64{correction, zero}, repo.correctionWrites)
+}
+
+func TestUpdateAccountRejectsInvalidCarpoolQuotaCorrection(t *testing.T) {
+	parent := int64(2)
+	for _, tt := range []struct {
+		name, platform, accountType, newType string
+		parent                               *int64
+		correction                           float64
+		wantErr                              error
+	}{
+		{"other provider", PlatformGrok, AccountTypeOAuth, "", nil, 12, ErrCarpoolQuotaCorrectionAccountInvalid},
+		{"api key", PlatformOpenAI, AccountTypeAPIKey, "", nil, 12, ErrCarpoolQuotaCorrectionAccountInvalid},
+		{"shadow", PlatformOpenAI, AccountTypeOAuth, "", &parent, 0, ErrCarpoolQuotaCorrectionAccountInvalid},
+		{"switching away from oauth", PlatformOpenAI, AccountTypeOAuth, AccountTypeAPIKey, nil, 12, ErrCarpoolQuotaCorrectionAccountInvalid},
+		{"invalid precision", PlatformOpenAI, AccountTypeOAuth, "", nil, 12.345, ValidateCarpoolQuotaCorrectionUSD(12.345)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			account := &Account{ID: 1, Name: "original", Platform: tt.platform, Type: tt.accountType, ParentAccountID: tt.parent}
+			repo := &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{1: account}}
+			_, err := (&adminServiceImpl{accountRepo: repo}).UpdateAccount(context.Background(), 1, &UpdateAccountInput{
+				Name: "edited", Type: tt.newType, CarpoolQuotaCorrectionUSD: &tt.correction,
+			})
+			require.ErrorIs(t, err, tt.wantErr)
+			require.Equal(t, "original", repo.accounts[1].Name)
+		})
+	}
+}
+
+func TestAdminCarpoolQuotaCorrectionProtectedFromOtherWrites(t *testing.T) {
+	ctx := context.Background()
+	repo := &upstreamBillingProbeAccountRepo{}
+	svc := &adminServiceImpl{accountRepo: repo}
+	injectedExtra := func() map[string]any {
+		return map[string]any{CarpoolQuotaCorrectionExtraKey: 99.0, "note": "keep"}
+	}
+	account, err := svc.CreateAccount(ctx, &CreateAccountInput{
+		Name: "test", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		Extra: injectedExtra(), SkipDefaultGroupBind: true,
+	})
+	require.NoError(t, err)
+	require.NotContains(t, account.Extra, CarpoolQuotaCorrectionExtraKey)
+	require.Equal(t, "keep", account.Extra["note"])
+
+	account.Extra[CarpoolQuotaCorrectionExtraKey] = 12.0
+	require.NoError(t, svc.UpdateAccountExtra(ctx, account.ID, injectedExtra()))
+	require.Equal(t, 12.0, CarpoolQuotaCorrectionUSD(account.Extra))
+	require.Equal(t, map[string]any{"note": "keep"}, repo.updates[account.ID][0])
+
+	_, err = svc.BulkUpdateAccounts(ctx, &BulkUpdateAccountsInput{AccountIDs: []int64{account.ID}, Extra: injectedExtra()})
+	require.NoError(t, err)
+	require.Len(t, repo.bulkUpdates, 1)
+	require.Equal(t, map[string]any{"note": "keep"}, repo.bulkUpdates[0].Extra)
+
+	duplicatedExtra, err := duplicateAccountExtra(account.Extra)
+	require.NoError(t, err)
+	require.NotContains(t, duplicatedExtra, CarpoolQuotaCorrectionExtraKey)
+}
+
 func TestCreateAccountDropsManagedUpstreamBillingProbeState(t *testing.T) {
 	repo := &upstreamBillingProbeAccountRepo{}
 	svc := &adminServiceImpl{accountRepo: repo}

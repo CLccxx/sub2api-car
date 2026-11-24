@@ -137,6 +137,43 @@ func TestSharedSubscriptionUsageProjection(t *testing.T) {
 	require.Equal(t, int64(1), quota.calls.Load())
 }
 
+func TestSharedSubscriptionUsageAppliesQuotaCorrectionPerResponse(t *testing.T) {
+	svc, _, accounts, quota, _, _ := sharedUsageFixture(t)
+	accounts.accounts[0].Extra = map[string]any{CarpoolQuotaCorrectionExtraKey: 10.0}
+	first, err := svc.Get(context.Background(), 7, 1)
+	require.NoError(t, err)
+	require.Equal(t, "ready", first.Status)
+	require.Equal(t, float64(60), *first.SevenDay.EstimatedTotalCost)
+
+	// 冷却窗口内换矫正值：不重新采样，缓存保留原始预估，新值只叠加在本次响应上。
+	accounts.accounts[0].Extra = map[string]any{CarpoolQuotaCorrectionExtraKey: -5.0}
+	second, err := svc.Get(context.Background(), 7, 1)
+	require.NoError(t, err)
+	require.Equal(t, float64(45), *second.SevenDay.EstimatedTotalCost)
+	require.Equal(t, int64(1), quota.calls.Load())
+
+	// 矫正后不大于 0 时不展示虚构估算。
+	accounts.accounts[0].Extra = map[string]any{CarpoolQuotaCorrectionExtraKey: -100.0}
+	third, err := svc.Get(context.Background(), 7, 1)
+	require.NoError(t, err)
+	require.Nil(t, third.SevenDay.EstimatedTotalCost)
+}
+
+func TestSharedSubscriptionUsageMembersShareOneSnapshotWithCorrection(t *testing.T) {
+	svc, subs, accounts, quota, _, _ := sharedUsageFixture(t)
+	svc.subscriptions = &sharedUsageTwoUsersRepo{subs}
+	accounts.accounts[0].Extra = map[string]any{CarpoolQuotaCorrectionExtraKey: 10.0}
+	first, err := svc.Get(context.Background(), 7, 1)
+	require.NoError(t, err)
+	require.Equal(t, float64(60), *first.SevenDay.EstimatedTotalCost)
+	second, err := svc.Get(context.Background(), 8, 2)
+	require.NoError(t, err)
+	require.Equal(t, float64(60), *second.SevenDay.EstimatedTotalCost)
+	// 共享缓存保存原始预估，矫正只叠加在响应上，两个成员看到同一矫正结果。
+	require.Equal(t, first, second)
+	require.Equal(t, int64(1), quota.calls.Load())
+}
+
 func TestSharedSubscriptionUsageAuthorizationBeforeCache(t *testing.T) {
 	for _, scenario := range []string{"other user", "expired", "revoked", "deleted", "deleted group"} {
 		t.Run(scenario, func(t *testing.T) {

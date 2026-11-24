@@ -20,6 +20,17 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 )
 
+var ErrCarpoolQuotaCorrectionAccountInvalid = infraerrors.BadRequest(
+	"CARPOOL_QUOTA_CORRECTION_ACCOUNT_INVALID",
+	"carpool_quota_correction_usd can only be edited for non-shadow OpenAI OAuth accounts",
+)
+
+// carpoolQuotaCorrectionAccountRepository persists explicit correction intent in
+// the same locked write as the rest of the admin account edit.
+type carpoolQuotaCorrectionAccountRepository interface {
+	UpdateWithCarpoolQuotaCorrection(ctx context.Context, account *Account, probeEnabled, rateSyncEnabled *bool, rateMultiplier *float64, correctionUSD float64) error
+}
+
 // Account management implementations
 func (s *adminServiceImpl) ListAccounts(ctx context.Context, page, pageSize int, platform, accountType, status, search string, groupID int64, privacyMode string, sortBy, sortOrder string) ([]Account, int64, error) {
 	if groupID > 0 {
@@ -104,14 +115,15 @@ var duplicateAccountDiscardedExtraKeys = map[string]struct{}{
 	"crs_account_id": {},
 	"crs_kind":       {},
 	"crs_synced_at":  {},
-	// Local quota usage and derived window timestamps must start fresh.
-	"quota_used":            {},
-	"quota_daily_used":      {},
-	"quota_weekly_used":     {},
-	"quota_daily_start":     {},
-	"quota_weekly_start":    {},
-	"quota_daily_reset_at":  {},
-	"quota_weekly_reset_at": {},
+	// Local quota usage, corrections, and derived window timestamps must start fresh.
+	CarpoolQuotaCorrectionExtraKey: {},
+	"quota_used":                   {},
+	"quota_daily_used":             {},
+	"quota_weekly_used":            {},
+	"quota_daily_start":            {},
+	"quota_weekly_start":           {},
+	"quota_daily_reset_at":         {},
+	"quota_weekly_reset_at":        {},
 	// Provider observations, capability probes, and transient scheduling state.
 	"model_rate_limits":                      {},
 	"session_window_utilization":             {},
@@ -414,6 +426,8 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 	if input.Platform == PlatformTypeSafe && input.Type != AccountTypeAPIKey {
 		return nil, errors.New("typesafe accounts only support apikey credentials")
 	}
+	// Quota corrections are configured only on existing accounts via a typed edit.
+	delete(accountExtra, CarpoolQuotaCorrectionExtraKey)
 	// Probe/session state is system-managed. New accounts always start with automatic refresh disabled.
 	delete(accountExtra, UpstreamBillingProbeEnabledExtraKey)
 	delete(accountExtra, UpstreamBillingRateSyncEnabledExtraKey)
@@ -587,6 +601,19 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if account.Platform == PlatformTypeSafe && input.Type != "" && input.Type != AccountTypeAPIKey {
 		return nil, errors.New("typesafe accounts only support apikey credentials")
 	}
+	effectiveType := account.Type
+	if input.Type != "" {
+		effectiveType = input.Type
+	}
+	correctionEligible := account.Platform == PlatformOpenAI && effectiveType == AccountTypeOAuth && !account.IsShadow()
+	if input.CarpoolQuotaCorrectionUSD != nil {
+		if !correctionEligible {
+			return nil, ErrCarpoolQuotaCorrectionAccountInvalid
+		}
+		if err := ValidateCarpoolQuotaCorrectionUSD(*input.CarpoolQuotaCorrectionUSD); err != nil {
+			return nil, err
+		}
+	}
 	var normalizedExtra map[string]any
 	if input.Extra != nil {
 		normalizedExtra, err = normalizeOpenAILongContextBillingUpdateExtra(account, input)
@@ -596,10 +623,6 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		normalizedExtra, err = normalizeGrokMediaEligibilityUpdateExtra(account, input, normalizedExtra)
 		if err != nil {
 			return nil, err
-		}
-		effectiveType := account.Type
-		if input.Type != "" {
-			effectiveType = input.Type
 		}
 		normalizedExtra, err = normalizeOpenAIAutoResetCreditExtra(account.Platform, effectiveType, account.IsShadow(), normalizedExtra)
 		if err != nil {
@@ -693,6 +716,12 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		delete(normalizedExtra, OllamaCloudUsageSnapshotExtraKey)
 		delete(normalizedExtra, OpenCodeGoUsageAutoRefreshExtraKey)
 		delete(normalizedExtra, OpenCodeGoUsageSnapshotExtraKey)
+		delete(normalizedExtra, CarpoolQuotaCorrectionExtraKey)
+		if correctionEligible {
+			if current, ok := account.Extra[CarpoolQuotaCorrectionExtraKey]; ok {
+				normalizedExtra[CarpoolQuotaCorrectionExtraKey] = current
+			}
+		}
 		// 目录观察和能力 metadata 只由同步写入。表单里的旧值或注入值不能进入本次更新。
 		delete(normalizedExtra, grokObservedModelsExtraKey)
 		delete(normalizedExtra, UpstreamModelMetadataExtraKey)
@@ -882,7 +911,18 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		// AdminAccountRepository.
 		updater, _ = s.accountRepo.(AccountBillingSettingsRepository)
 	}
-	if updater != nil {
+	if input.CarpoolQuotaCorrectionUSD != nil {
+		correctionUpdater, ok := s.accountRepo.(carpoolQuotaCorrectionAccountRepository)
+		if !ok {
+			return nil, infraerrors.InternalServer("CARPOOL_QUOTA_CORRECTION_UNAVAILABLE", "account repository does not support quota correction edits")
+		}
+		if err := correctionUpdater.UpdateWithCarpoolQuotaCorrection(
+			ctx, account, requestedProbeEnabledUpdate, requestedRateSyncEnabledUpdate, input.RateMultiplier, *input.CarpoolQuotaCorrectionUSD,
+		); err != nil {
+			return nil, err
+		}
+		billingSettingsAppliedAtomically = true
+	} else if updater != nil {
 		if err := updater.UpdateWithAccountBillingSettings(
 			ctx,
 			account,
@@ -941,6 +981,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, updates map[string]any) error {
 	updates = sanitizedCodexFingerprintExtraUpdates(updates)
 	updates = stripOpenAIAutoResetCreditManagedExtra(updates, true)
+	delete(updates, CarpoolQuotaCorrectionExtraKey)
 	delete(updates, ResetVoteMin7DPercentExtraKey)
 	delete(updates, UpstreamBillingProbeEnabledExtraKey)
 	delete(updates, UpstreamBillingRateSyncEnabledExtraKey)
@@ -971,6 +1012,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	// Managed probe/session state may only enter through dedicated typed endpoints.
 	input.Extra = sanitizedCodexFingerprintExtraUpdates(input.Extra)
 	input.Extra = stripOpenAIAutoResetCreditManagedExtra(input.Extra, true)
+	delete(input.Extra, CarpoolQuotaCorrectionExtraKey)
 	delete(input.Extra, ResetVoteMin7DPercentExtraKey)
 	delete(input.Extra, UpstreamBillingProbeEnabledExtraKey)
 	delete(input.Extra, UpstreamBillingRateSyncEnabledExtraKey)

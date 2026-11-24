@@ -1070,6 +1070,11 @@ export default {
         hint: 'Usage must reach this percentage to start a vote. Usage is checked again before a credit is used.',
         invalidMinimum: 'The reset vote minimum must be between 0.1% and 100%.'
       },
+      carpoolQuotaCorrection: {
+        label: 'Carpool quota correction (USD)',
+        hint: 'Enter a positive amount to raise the cap or a negative amount to lower it. Leave blank for zero. The effective cap updates on the next successful half-hour sync.',
+        invalid: 'Enter an amount between −10 billion and +10 billion USD, with up to two decimal places.'
+      },
       autoResetCredit: {
 	    title: 'Automatically use reset credits',
 	    hint: 'Uses the earliest-expiring available credit only when actual usage reaches a threshold. Off by default; the account remains paused if no credit is available or reset fails.',

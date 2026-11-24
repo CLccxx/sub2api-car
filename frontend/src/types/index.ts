@@ -1642,6 +1642,7 @@ export interface UpdateAccountRequest {
   type?: AccountType
   credentials?: Record<string, unknown>
   extra?: Record<string, unknown>
+  carpool_quota_correction_usd?: number
   proxy_id?: number | null
   concurrency?: number
   load_factor?: number | null

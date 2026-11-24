@@ -30,7 +30,7 @@ func TestCarpoolPostgres(t *testing.T) {
 		CREATE TABLE groups (id bigint PRIMARY KEY, status text, platform text, subscription_type text,
 		 updated_at timestamptz NOT NULL DEFAULT now(), deleted_at timestamptz, weekly_limit_usd numeric(20,8));
 		CREATE TABLE accounts (id bigint PRIMARY KEY, platform text, type text, status text, parent_account_id bigint,
-		 credentials jsonb, deleted_at timestamptz, auto_pause_on_expired boolean DEFAULT false, expires_at timestamptz);
+		 credentials jsonb, extra jsonb, deleted_at timestamptz, auto_pause_on_expired boolean DEFAULT false, expires_at timestamptz);
 		CREATE TABLE account_groups (account_id bigint, group_id bigint, PRIMARY KEY(account_id, group_id));
 		CREATE TABLE api_keys (id bigint PRIMARY KEY, key text, group_id bigint, deleted_at timestamptz);
 		CREATE TABLE auth_cache_invalidation_outbox (cache_key text);
@@ -116,6 +116,29 @@ func TestCarpoolPostgres(t *testing.T) {
 	ok, err = repo.Apply(ctx, targets[0], account, 400, slot)
 	require.NoError(t, err)
 	require.False(t, ok, "a changed bonus invalidates a stale estimate even with the same timestamp")
+	_, err = db.ExecContext(ctx, `UPDATE groups SET carpool_bonus_usd=100 WHERE id=10`)
+	require.NoError(t, err)
+	targets, err = repo.ListPending(ctx, slot)
+	require.NoError(t, err)
+	require.Len(t, targets, 1)
+	corrected := &service.Account{ID: 9, Credentials: map[string]any{}, Extra: map[string]any{service.CarpoolQuotaCorrectionExtraKey: 25.0}}
+	ok, err = repo.Apply(ctx, targets[0], corrected, 400, slot)
+	require.NoError(t, err)
+	require.False(t, ok, "a correction changed since sampling must not overwrite the cap")
+	_, err = db.ExecContext(ctx, `UPDATE accounts SET extra='{"carpool_quota_correction_usd": 25}' WHERE id=9`)
+	require.NoError(t, err)
+	ok, err = repo.Apply(ctx, targets[0], corrected, 400, slot)
+	require.NoError(t, err)
+	require.True(t, ok, "a matching sampled correction applies")
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT weekly_limit_usd FROM groups WHERE id=10`).Scan(&limit))
+	require.Equal(t, 400.0, limit)
+	next := slot.Add(time.Hour)
+	targets, err = repo.ListPending(ctx, next)
+	require.NoError(t, err)
+	require.Len(t, targets, 1)
+	ok, err = repo.Apply(ctx, targets[0], account, 400, next)
+	require.NoError(t, err)
+	require.False(t, ok, "a stale sample after a correction edit must not overwrite the cap")
 	for _, invalid := range []string{"-1", "0.001", "10000000000.01", "NaN", "Infinity"} {
 		_, err = db.ExecContext(ctx, `UPDATE groups SET carpool_bonus_usd=$1 WHERE id=10`, invalid)
 		require.Error(t, err, "invalid bonus %s must be rejected by the database", invalid)

@@ -5,6 +5,7 @@ import (
 	"math"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/shopspring/decimal"
 )
 
 const DefaultCarpoolBonusUSD = 100.0
@@ -68,13 +69,20 @@ func applyCarpoolSettings(group *Group, previousLimit *float64) error {
 }
 
 func carpoolWeeklyLimit(estimate float64, members int, bonusUSD float64) (float64, bool) {
-	const stepUSD = 10
-	if !validCarpoolMembers(members) || !validCarpoolBonus(bonusUSD) || math.IsNaN(estimate) || math.IsInf(estimate, 0) || estimate <= 0 || estimate > 1e10 {
+	validated, ok := carpoolCorrectedEstimate(estimate, 0)
+	if !ok {
 		return 0, false
 	}
-	// A positive subnormal estimate can underflow when divided by the step.
-	totalCents := math.Max(1, math.Ceil(estimate/stepUSD)) * stepUSD * 100
-	// Add the bonus in cents to avoid introducing fractional-cent float artifacts.
-	limit := (math.Floor(totalCents/float64(members)) + math.Round(bonusUSD*100)) / 100
+	return carpoolWeeklyLimitFromEstimate(validated, members, bonusUSD)
+}
+
+func carpoolWeeklyLimitFromEstimate(estimate decimal.Decimal, members int, bonusUSD float64) (float64, bool) {
+	if !validCarpoolMembers(members) || !validCarpoolBonus(bonusUSD) {
+		return 0, false
+	}
+	// Split at full precision, truncating only the per-member share to cents.
+	shareCents, _ := estimate.Shift(2).QuoRem(decimal.NewFromInt(int64(members)), 0)
+	limit := float64(shareCents.IntPart()+int64(math.Round(bonusUSD*100))) / 100
+	// Zero is treated as an unset cap; keep the existing cap instead.
 	return limit, limit > 0
 }
