@@ -46,6 +46,10 @@ func (r *carpoolQuotaRepository) Apply(ctx context.Context, target service.Carpo
 	if err != nil {
 		return false, err
 	}
+	// The service sampled the quota correction from the same account row it
+	// passes here; a concurrent correction edit between sampling and this lock
+	// must not let the stale estimate overwrite the cap.
+	sampledCorrection := service.CarpoolQuotaCorrectionUSD(account.Extra)
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
@@ -65,11 +69,13 @@ func (r *carpoolQuotaRepository) Apply(ctx context.Context, target service.Carpo
 	if err != nil {
 		return false, err
 	}
-	// Lock bindings and identities, including unsupported or disabled extra accounts.
+	// Lock bindings and identities, including unsupported or disabled extra
+	// accounts, and re-read the locked correction to reject stale samples.
 	rows, err := tx.QueryContext(ctx, `SELECT a.id,
 		(a.platform = 'openai' AND a.type = 'oauth' AND a.status = 'active'
 		 AND a.parent_account_id IS NULL AND a.credentials = $2::jsonb
-		 AND (NOT a.auto_pause_on_expired OR a.expires_at IS NULL OR a.expires_at > NOW())) AS eligible
+		 AND (NOT a.auto_pause_on_expired OR a.expires_at IS NULL OR a.expires_at > NOW())) AS eligible,
+		COALESCE(a.extra, '{}'::jsonb)::text AS extra
 		FROM accounts a JOIN account_groups ag ON ag.account_id = a.id
 		WHERE ag.group_id = $1 AND a.deleted_at IS NULL ORDER BY a.id LIMIT 2
 		FOR SHARE OF a, ag`, target.GroupID, string(credentials))
@@ -80,12 +86,19 @@ func (r *carpoolQuotaRepository) Apply(ctx context.Context, target service.Carpo
 	for rows.Next() {
 		var accountID int64
 		var eligible bool
-		if err := rows.Scan(&accountID, &eligible); err != nil {
+		var extraJSON string
+		if err := rows.Scan(&accountID, &eligible, &extraJSON); err != nil {
+			_ = rows.Close()
+			return false, err
+		}
+		var extra map[string]any
+		if err := json.Unmarshal([]byte(extraJSON), &extra); err != nil {
 			_ = rows.Close()
 			return false, err
 		}
 		count++
-		matches = accountID == account.ID && eligible
+		matches = accountID == account.ID && eligible &&
+			service.CarpoolQuotaCorrectionUSD(extra) == sampledCorrection
 	}
 	err = rows.Err()
 	_ = rows.Close()

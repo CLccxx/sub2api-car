@@ -29,7 +29,10 @@ type CarpoolQuotaRepository interface {
 }
 
 type carpoolQuotaSample struct {
-	view    SharedSubscriptionUsage
+	view SharedSubscriptionUsage
+	// account 是采样时的最小账号快照（ID、凭据、矫正值）：Apply 用采样凭据
+	// 和采样矫正与锁内数据库行比对，rebind 或并发矫正修改后不得写入旧采样；
+	// 同一账号被多个分组复用时也只按采样时的矫正加算一次。
 	account Account
 }
 
@@ -173,9 +176,13 @@ func (s *CarpoolQuotaService) refresh(ctx context.Context, target CarpoolQuotaTa
 	// This bypasses the visitor cache but never probes a model or resets quota.
 	sample, exists := sampled[account.ID]
 	if !exists {
+		snapshot := Account{ID: account.ID, Credentials: account.Credentials}
+		if correction, ok := account.Extra[CarpoolQuotaCorrectionExtraKey]; ok {
+			snapshot.Extra = map[string]any{CarpoolQuotaCorrectionExtraKey: correction}
+		}
 		sample = carpoolQuotaSample{
 			view:    querySharedAccountUsage(ctx, account.ID, s.quota, s.stats, s.now).view,
-			account: Account{ID: account.ID, Credentials: account.Credentials},
+			account: snapshot,
 		}
 		sampled[account.ID] = sample
 	}
@@ -188,7 +195,13 @@ func (s *CarpoolQuotaService) refresh(ctx context.Context, target CarpoolQuotaTa
 		window == nil || window.EstimatedTotalCost == nil || window.ResetsAt == nil || !window.ResetsAt.After(now) || window.ResetsAt.After(now.Add(7*24*time.Hour+time.Minute)) {
 		return
 	}
-	limit, ok := carpoolWeeklyLimit(*window.EstimatedTotalCost, target.Members, target.BonusUSD)
+	// 定时器复用同一采样；读取采样时缓存的矫正值，而不是当前账号行，
+	// 避免同一账号绑定多组时重复加算或读到采样后的并发修改。
+	corrected, ok := carpoolCorrectedEstimate(*window.EstimatedTotalCost, CarpoolQuotaCorrectionUSD(sample.account.Extra))
+	if !ok {
+		return
+	}
+	limit, ok := carpoolWeeklyLimitFromEstimate(corrected, target.Members, target.BonusUSD)
 	if !ok {
 		return
 	}

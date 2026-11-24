@@ -90,21 +90,22 @@ func ensureCodexFingerprintSeedSQL(extraExpr string) string {
 		"ELSE " + extraExpr + " END"
 }
 
-func stripCodexFingerprintSeedFromExtraUpdate(extra map[string]any) map[string]any {
-	if extra == nil {
-		return nil
+func stripCarpoolQuotaCorrectionFromExtra(extra map[string]any) map[string]any {
+	if _, exists := extra[service.CarpoolQuotaCorrectionExtraKey]; exists {
+		extra = copyJSONMap(extra)
+		delete(extra, service.CarpoolQuotaCorrectionExtraKey)
 	}
-	if _, exists := extra["codex_fingerprint_seed"]; !exists {
+	return extra
+}
+
+func stripManagedAccountExtraFromUpdate(extra map[string]any) map[string]any {
+	if _, exists := extra["codex_fingerprint_seed"]; exists {
+		extra = copyJSONMap(extra)
+		delete(extra, "codex_fingerprint_seed")
+		delete(extra, service.CarpoolQuotaCorrectionExtraKey)
 		return extra
 	}
-	stripped := make(map[string]any, len(extra)-1)
-	for key, value := range extra {
-		if key == "codex_fingerprint_seed" {
-			continue
-		}
-		stripped[key] = value
-	}
-	return stripped
+	return stripCarpoolQuotaCorrectionFromExtra(extra)
 }
 
 // NewAccountRepository 创建账户仓储实例。
@@ -143,13 +144,14 @@ func createAccountRecord(ctx context.Context, client *dbent.Client, account *ser
 		return service.ErrAccountNilInput
 	}
 
+	extra := stripCarpoolQuotaCorrectionFromExtra(account.Extra)
 	builder := client.Account.Create().
 		SetName(account.Name).
 		SetNillableNotes(account.Notes).
 		SetPlatform(account.Platform).
 		SetType(account.Type).
 		SetCredentials(normalizeJSONMap(account.Credentials)).
-		SetExtra(normalizeJSONMap(account.Extra)).
+		SetExtra(normalizeJSONMap(extra)).
 		SetConcurrency(account.Concurrency).
 		SetPriority(account.Priority).
 		SetStatus(account.Status).
@@ -203,6 +205,7 @@ func createAccountRecord(ctx context.Context, client *dbent.Client, account *ser
 	}
 
 	account.ID = created.ID
+	account.Extra = extra
 	account.CreatedAt = created.CreatedAt
 	account.UpdatedAt = created.UpdatedAt
 	return nil
@@ -449,7 +452,7 @@ func (r *accountRepository) Update(ctx context.Context, account *service.Account
 	if scoped := r.accountTransactionScope(ctx); scoped != r {
 		return scoped.Update(ctx, account)
 	}
-	return r.updateAccount(ctx, account, nil, nil, account.RateMultiplier)
+	return r.updateAccount(ctx, account, nil, nil, account.RateMultiplier, nil)
 }
 
 // UpdateWithAccountBillingSettings applies an admin account edit while
@@ -462,7 +465,25 @@ func (r *accountRepository) UpdateWithAccountBillingSettings(
 	rateSyncEnabled *bool,
 	rateMultiplier *float64,
 ) error {
-	return r.updateAccount(ctx, account, probeEnabled, rateSyncEnabled, rateMultiplier)
+	return r.updateAccount(ctx, account, probeEnabled, rateSyncEnabled, rateMultiplier, nil)
+}
+
+// UpdateWithCarpoolQuotaCorrection applies explicit correction intent under the
+// same row lock as the rest of the admin edit. Zero removes the key.
+func (r *accountRepository) UpdateWithCarpoolQuotaCorrection(
+	ctx context.Context,
+	account *service.Account,
+	probeEnabled, rateSyncEnabled *bool,
+	rateMultiplier *float64,
+	correctionUSD float64,
+) error {
+	if account == nil || !account.IsOpenAIOAuth() || account.IsShadow() {
+		return service.ErrCarpoolQuotaCorrectionAccountInvalid
+	}
+	if err := service.ValidateCarpoolQuotaCorrectionUSD(correctionUSD); err != nil {
+		return err
+	}
+	return r.updateAccount(ctx, account, probeEnabled, rateSyncEnabled, rateMultiplier, &correctionUSD)
 }
 
 func (r *accountRepository) updateAccount(
@@ -471,6 +492,7 @@ func (r *accountRepository) updateAccount(
 	explicitProbeEnabled *bool,
 	explicitRateSyncEnabled *bool,
 	explicitRateMultiplier *float64,
+	explicitCorrectionUSD *float64,
 ) error {
 	if account == nil {
 		return nil
@@ -502,6 +524,7 @@ func (r *accountRepository) updateAccount(
 		explicitProbeEnabled,
 		explicitRateSyncEnabled,
 		explicitRateMultiplier,
+		explicitCorrectionUSD,
 	)
 	if err != nil {
 		return translatePersistenceError(err, service.ErrAccountNotFound, nil)
@@ -531,8 +554,9 @@ func (r *accountRepository) updateLockedAccount(
 	explicitProbeEnabled *bool,
 	explicitRateSyncEnabled *bool,
 	explicitRateMultiplier *float64,
+	explicitCorrectionUSD *float64,
 ) (*dbent.Account, error) {
-	extra, err := lockAndMergeAccountProbeExtra(ctx, client, account, explicitProbeEnabled, explicitRateSyncEnabled)
+	extra, err := lockAndMergeAccountProbeExtra(ctx, client, account, explicitProbeEnabled, explicitRateSyncEnabled, explicitCorrectionUSD)
 	if err != nil {
 		return nil, err
 	}
@@ -627,6 +651,7 @@ func lockAndMergeAccountProbeExtra(
 	account *service.Account,
 	explicitProbeEnabled *bool,
 	explicitRateSyncEnabled *bool,
+	explicitCorrectionUSD *float64,
 ) (map[string]any, error) {
 	credentials, err := json.Marshal(normalizeJSONMap(account.Credentials))
 	if err != nil {
@@ -682,7 +707,11 @@ func lockAndMergeAccountProbeExtra(
 			extra -> 'opencode_go_usage_auto_refresh',
 			extra -> 'opencode_go_usage_snapshot',
 			extra -> 'grok_observed_models',
-			extra -> 'upstream_model_metadata'
+			extra -> 'upstream_model_metadata',
+			parent_account_id IS NOT NULL,
+			CASE WHEN platform = 'openai' AND type = 'oauth' AND parent_account_id IS NULL
+				THEN extra -> '`+service.CarpoolQuotaCorrectionExtraKey+`'
+			END
 		FROM accounts
 		WHERE id = $1 AND deleted_at IS NULL
 		FOR NO KEY UPDATE
@@ -713,6 +742,8 @@ func lockAndMergeAccountProbeExtra(
 		currentOpenCodeSnapshot        []byte
 		currentGrokObservedModels      []byte
 		currentUpstreamModelMetadata   []byte
+		currentIsShadow                bool
+		currentCorrectionUSD           []byte
 	)
 	if err := rows.Scan(
 		&identityUnchanged,
@@ -729,6 +760,8 @@ func lockAndMergeAccountProbeExtra(
 		&currentOpenCodeSnapshot,
 		&currentGrokObservedModels,
 		&currentUpstreamModelMetadata,
+		&currentIsShadow,
+		&currentCorrectionUSD,
 	); err != nil {
 		return nil, err
 	}
@@ -737,6 +770,24 @@ func lockAndMergeAccountProbeExtra(
 	}
 
 	extra := copyJSONMap(normalizeJSONMap(account.Extra))
+	// Only a typed edit may change the correction. Ordinary saves use the
+	// locked row, not the stale or user-supplied Extra on the account object.
+	delete(extra, service.CarpoolQuotaCorrectionExtraKey)
+	correctionEligible := account.IsOpenAIOAuth() && !account.IsShadow() && !currentIsShadow
+	if explicitCorrectionUSD != nil {
+		if !correctionEligible {
+			return nil, service.ErrCarpoolQuotaCorrectionAccountInvalid
+		}
+		if *explicitCorrectionUSD != 0 {
+			extra[service.CarpoolQuotaCorrectionExtraKey] = *explicitCorrectionUSD
+		}
+	} else if correctionEligible {
+		if value, ok, err := decodeAccountExtraJSON(currentCorrectionUSD); err != nil {
+			return nil, err
+		} else if ok {
+			extra[service.CarpoolQuotaCorrectionExtraKey] = value
+		}
+	}
 	for _, key := range []string{
 		service.UpstreamBillingProbeEnabledExtraKey,
 		service.UpstreamBillingRateSyncEnabledExtraKey,
@@ -2890,7 +2941,7 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 	if scoped := r.accountTransactionScope(ctx); scoped != r {
 		return scoped.UpdateExtra(ctx, id, updates)
 	}
-	updates = stripCodexFingerprintSeedFromExtraUpdate(updates)
+	updates = stripManagedAccountExtraFromUpdate(updates)
 	if len(updates) == 0 {
 		return nil
 	}
@@ -3167,7 +3218,7 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	updates.Extra = stripCodexFingerprintSeedFromExtraUpdate(updates.Extra)
+	updates.Extra = stripManagedAccountExtraFromUpdate(updates.Extra)
 
 	setClauses := make([]string, 0, 8)
 	args := make([]any, 0, 8)

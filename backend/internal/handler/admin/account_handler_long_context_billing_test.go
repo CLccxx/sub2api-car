@@ -13,6 +13,61 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestAccountUpdateBindsCarpoolQuotaCorrectionIntent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tt := range []struct {
+		name, body string
+		want       *float64
+		wantStatus int
+	}{
+		{"omitted", `{}`, nil, http.StatusOK},
+		{"null", `{"carpool_quota_correction_usd":null}`, nil, http.StatusOK},
+		{"clear", `{"carpool_quota_correction_usd":0}`, accountCorrectionTestPtr(0), http.StatusOK},
+		{"scientific zero clears", `{"carpool_quota_correction_usd":-0.000e999999999999999999999}`, accountCorrectionTestPtr(0), http.StatusOK},
+		{"signed", `{"carpool_quota_correction_usd":-12.34}`, accountCorrectionTestPtr(-12.34), http.StatusOK},
+		{"trailing zeros", `{"carpool_quota_correction_usd":12.34000}`, accountCorrectionTestPtr(12.34), http.StatusOK},
+		{"scientific cents", `{"carpool_quota_correction_usd":12340E-3}`, accountCorrectionTestPtr(12.34), http.StatusOK},
+		{"positive bound", `{"carpool_quota_correction_usd":1e+10}`, accountCorrectionTestPtr(1e10), http.StatusOK},
+		{"negative bound", `{"carpool_quota_correction_usd":-10000000000.00}`, accountCorrectionTestPtr(-1e10), http.StatusOK},
+		{"one cent below bound", `{"carpool_quota_correction_usd":9999999999.99}`, accountCorrectionTestPtr(9999999999.99), http.StatusOK},
+		{"raw extra is not typed intent", `{"extra":{"carpool_quota_correction_usd":5}}`, nil, http.StatusOK},
+		{"quoted number", `{"carpool_quota_correction_usd":"12.34"}`, nil, http.StatusBadRequest},
+		{"boolean", `{"carpool_quota_correction_usd":true}`, nil, http.StatusBadRequest},
+		{"object", `{"carpool_quota_correction_usd":{}}`, nil, http.StatusBadRequest},
+		{"array", `{"carpool_quota_correction_usd":[12.34]}`, nil, http.StatusBadRequest},
+		{"precision lost in float", `{"carpool_quota_correction_usd":12.3400000000000001}`, nil, http.StatusBadRequest},
+		{"range lost in float", `{"carpool_quota_correction_usd":10000000000.0000001}`, nil, http.StatusBadRequest},
+		{"negative out of range", `{"carpool_quota_correction_usd":-10000000000.01}`, nil, http.StatusBadRequest},
+		{"scientific sub-cent", `{"carpool_quota_correction_usd":1e-3}`, nil, http.StatusBadRequest},
+		{"float underflow is not clear", `{"carpool_quota_correction_usd":1e-400}`, nil, http.StatusBadRequest},
+		{"large positive exponent", `{"carpool_quota_correction_usd":1e1000000000}`, nil, http.StatusBadRequest},
+		{"large negative exponent", `{"carpool_quota_correction_usd":1e-1000000000}`, nil, http.StatusBadRequest},
+		{"exponent outside int range", `{"carpool_quota_correction_usd":1e999999999999999999999}`, nil, http.StatusBadRequest},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			stub := newStubAdminService()
+			handler := NewAccountHandler(stub, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+			router := gin.New()
+			router.PUT("/accounts/:id", handler.Update)
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPut, "/accounts/1", bytes.NewBufferString(tt.body))
+			request.Header.Set("Content-Type", "application/json")
+
+			router.ServeHTTP(recorder, request)
+
+			require.Equal(t, tt.wantStatus, recorder.Code)
+			if tt.wantStatus == http.StatusOK {
+				require.Equal(t, 1, stub.updateAccountCalls)
+				require.Equal(t, tt.want, stub.lastUpdateAccountInput.CarpoolQuotaCorrectionUSD)
+			} else {
+				require.Zero(t, stub.updateAccountCalls)
+			}
+		})
+	}
+}
+
+func accountCorrectionTestPtr(value float64) *float64 { return &value }
+
 func TestAccountAdminBoundariesRejectMalformedOpenAILongContextBillingValue(t *testing.T) {
 	const malformedExtra = `"extra":{"openai_long_context_billing_enabled":"true"}`
 

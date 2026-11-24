@@ -2913,6 +2913,18 @@
         <p id="reset-vote-min-7d-percent-hint" class="input-hint">{{ t('admin.accounts.resetVote.hint') }}</p>
       </div>
 
+      <div v-if="isResetVoteAccount" class="space-y-2">
+        <label for="carpool-quota-correction-usd" class="input-label">{{ t('admin.accounts.carpoolQuotaCorrection.label') }}</label>
+        <input
+          id="carpool-quota-correction-usd"
+          v-model="carpoolQuotaCorrectionUsdInput"
+          type="text"
+          class="input max-w-xs"
+          aria-describedby="carpool-quota-correction-usd-hint"
+        />
+        <p id="carpool-quota-correction-usd-hint" class="input-hint">{{ t('admin.accounts.carpoolQuotaCorrection.hint') }}</p>
+      </div>
+
       <!-- 配额控制 (Anthropic OAuth/SetupToken: 亲和 + 窗口费用 + 会话 + RPM 等) -->
       <div
         v-if="account?.platform === 'anthropic' && (account?.type === 'oauth' || account?.type === 'setup-token')"
@@ -3442,7 +3454,8 @@ import type {
   GrokModelDiagnostics,
   OpenCodeGoUsageState,
   OpenCodeGoUsageWindow,
-  TempUnschedulableScope
+  TempUnschedulableScope,
+  UpdateAccountRequest
 } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -4131,6 +4144,19 @@ const autoResetCredit5hThreshold = ref(100)
 const autoResetCredit7dThreshold = ref(100)
 const resetVoteMin7dPercent = ref<number | string>(1)
 const isResetVoteAccount = computed(() => props.account?.platform === 'openai' && props.account?.type === 'oauth' && !isSparkShadow.value)
+const CARPOOL_QUOTA_CORRECTION_EXTRA_KEY = 'carpool_quota_correction_usd'
+const MAX_CARPOOL_QUOTA_CORRECTION_USD = 10_000_000_000
+const carpoolQuotaCorrectionUsdInput = ref('0.00')
+let initialCarpoolQuotaCorrectionUsd = 0
+
+const parseCarpoolQuotaCorrectionUsd = (input: string): number | null => {
+  const value = input.trim()
+  if (value === '') return 0
+  if (!/^[+-]?(?:\d+(?:\.\d{0,2})?|\.\d{1,2})$/.test(value)) return null
+  const amount = Number(value)
+  return Math.abs(amount) <= MAX_CARPOOL_QUOTA_CORRECTION_USD ? amount : null
+}
+
 const upstreamBillingAutoProbeEnabled = ref(false)
 const upstreamBillingRateSyncEnabled = ref(false)
 const mixedScheduling = ref(false) // For antigravity accounts: enable mixed scheduling
@@ -4695,6 +4721,11 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 		typeof extra?.auto_reset_credit_7d_threshold === 'number' ? extra.auto_reset_credit_7d_threshold * 100 : 100
 	resetVoteMin7dPercent.value =
 		typeof extra?.reset_vote_min_7d_percent === 'number' ? extra.reset_vote_min_7d_percent : 1
+  const savedCorrection = extra?.[CARPOOL_QUOTA_CORRECTION_EXTRA_KEY]
+  initialCarpoolQuotaCorrectionUsd = typeof savedCorrection === 'number'
+    ? (parseCarpoolQuotaCorrectionUsd(String(savedCorrection)) ?? 0)
+    : 0
+  carpoolQuotaCorrectionUsdInput.value = initialCarpoolQuotaCorrectionUsd.toFixed(2)
 	upstreamBillingAutoProbeEnabled.value = extra?.upstream_billing_probe_enabled === true
   upstreamBillingRateSyncEnabled.value =
     upstreamBillingAutoProbeEnabled.value && extra?.upstream_billing_rate_sync_enabled === true
@@ -5564,7 +5595,7 @@ const openMixedChannelDialog = (opts: {
   showMixedChannelWarning.value = true
 }
 
-const withAntigravityConfirmFlag = (payload: Record<string, unknown>) => {
+const withAntigravityConfirmFlag = (payload: UpdateAccountRequest): UpdateAccountRequest => {
   if (needsMixedChannelCheck() && antigravityMixedChannelConfirmed.value) {
     return {
       ...payload,
@@ -5657,7 +5688,7 @@ const persistGrokMediaEligibility = async (accountID: number, updatedAccount: Ac
   return updatedAccount
 }
 
-const submitUpdateAccount = async (accountID: number, updatePayload: Record<string, unknown>) => {
+const submitUpdateAccount = async (accountID: number, updatePayload: UpdateAccountRequest) => {
   submitting.value = true
   try {
     let updatedAccount = await adminAPI.accounts.update(accountID, withAntigravityConfirmFlag(updatePayload))
@@ -5705,7 +5736,18 @@ const handleSubmit = async () => {
 		}
 	}
 
-  const updatePayload: Record<string, unknown> = { ...form }
+  const updatePayload: UpdateAccountRequest = { ...form }
+  if (isResetVoteAccount.value) {
+    const correction = parseCarpoolQuotaCorrectionUsd(carpoolQuotaCorrectionUsdInput.value)
+    if (correction === null) {
+      appStore.showError(t('admin.accounts.carpoolQuotaCorrection.invalid'))
+      return
+    }
+    if (correction !== initialCarpoolQuotaCorrectionUsd) {
+      updatePayload.carpool_quota_correction_usd = correction
+    }
+  }
+
   try {
     // 后端期望 proxy_id: 0 表示清除代理，而不是 null
     if (updatePayload.proxy_id === null) {
@@ -6460,6 +6502,11 @@ const handleSubmit = async () => {
         delete newExtra.upstream_request_id_header
       }
       updatePayload.extra = newExtra
+    }
+
+    // The correction is managed by the top-level write intent, not the extra snapshot.
+    if (updatePayload.extra) {
+      delete updatePayload.extra[CARPOOL_QUOTA_CORRECTION_EXTRA_KEY]
     }
 
     const canContinue = await ensureAntigravityMixedChannelConfirmed(async () => {

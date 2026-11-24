@@ -20,15 +20,17 @@ func TestCarpoolWeeklyLimit(t *testing.T) {
 		expected float64
 		ok       bool
 	}{
-		{1374, 4, 445, true}, {1374, 5, 376, true},
-		{1374.65, 4, 445, true}, {1374.65, 3, 560, true}, {1600, 5, 420, true},
-		{1399.99, 4, 450, true}, {1400, 4, 450, true}, {150, 4, 137.5, true},
+		{1374, 4, 443.5, true}, {1374, 5, 374.8, true},
+		{1374.65, 4, 443.66, true}, {1374.65, 3, 558.21, true}, {1600, 5, 420, true},
+		{1399.99, 4, 449.99, true}, {1400, 4, 450, true}, {150, 4, 137.5, true},
 		{520, 4, 230, true}, {560, 4, 240, true}, {550, 4, 237.5, true},
-		{600, 4, 250, true}, {550.5, 4, 240, true}, {550, 3, 283.33, true},
-		{520, 2, 360, true}, {49.99, 4, 112.5, true}, {50, 4, 112.5, true},
-		{50.01, 4, 115, true}, {99.99, 4, 125, true}, {100, 4, 125, true},
-		{9.99, 4, 102.5, true}, {10, 4, 102.5, true}, {19.99, 4, 105, true}, {20, 4, 105, true},
-		{math.Nextafter(10, 0), 4, 102.5, true}, {math.Nextafter(10, math.Inf(1)), 4, 105, true},
+		{600, 4, 250, true}, {550.5, 4, 237.62, true}, {550, 3, 283.33, true},
+		{520, 2, 360, true}, {49.99, 4, 112.49, true}, {50, 4, 112.5, true},
+		{50.01, 4, 112.5, true}, {99.99, 4, 124.99, true}, {100, 4, 125, true},
+		{9.99, 4, 102.49, true}, {10, 4, 102.5, true}, {19.99, 4, 104.99, true}, {20, 4, 105, true},
+		{9.999, 4, 102.49, true}, {10.001, 4, 102.5, true},
+		{math.Nextafter(10, 0), 4, 102.49, true}, {math.Nextafter(10, math.Inf(1)), 4, 102.5, true},
+		{1603, 4, 500.75, true}, {1700, 4, 525, true}, {1500, 4, 475, true},
 		{0, 4, 0, false}, {-100, 4, 0, false}, {math.NaN(), 4, 0, false},
 		{math.Inf(1), 4, 0, false}, {math.Inf(-1), 4, 0, false}, {1e10, 5, 2e9 + 100, true}, {1e10 + 1, 4, 0, false},
 		{1000, -1, 0, false}, {1000, 0, 0, false}, {1000, 1, 0, false}, {1000, 6, 0, false},
@@ -42,18 +44,33 @@ func TestCarpoolWeeklyLimit(t *testing.T) {
 }
 
 func TestCarpoolWeeklyLimitAddsBonusWithoutMinimumFloor(t *testing.T) {
+	// 去掉 10 USD 阶梯后，预估原样均分：10/2=5、10/3≈3.33、10/4=2.5、10/5=2，
+	// 各自加上 100 bonus；极小预估（5.33、5e-324）保留到分后接近 0.01 USD。
 	for _, test := range []struct {
 		members  int
 		expected float64
-	}{{2, 105}, {3, 103.33}, {4, 102.5}, {5, 102}} {
+	}{
+		{2, 100 + 10.0/2},
+		{3, 100 + math.Round(10.0/3*100)/100},
+		{4, 100 + 10.0/4},
+		{5, 100 + 10.0/5},
+	} {
 		t.Run(fmt.Sprintf("%d members", test.members), func(t *testing.T) {
-			for _, estimate := range []float64{5.33, math.SmallestNonzeroFloat64, 10} {
-				t.Run(fmt.Sprintf("estimate %g", estimate), func(t *testing.T) {
-					limit, ok := carpoolWeeklyLimit(estimate, test.members, DefaultCarpoolBonusUSD)
-					require.True(t, ok)
-					require.Equal(t, test.expected, limit)
-				})
-			}
+			t.Run("estimate 5.33", func(t *testing.T) {
+				limit, ok := carpoolWeeklyLimit(5.33, test.members, DefaultCarpoolBonusUSD)
+				require.True(t, ok)
+				require.Equal(t, 100+math.Floor(533.0/float64(test.members))/100, limit)
+			})
+			t.Run("estimate 5e-324", func(t *testing.T) {
+				limit, ok := carpoolWeeklyLimit(math.SmallestNonzeroFloat64, test.members, DefaultCarpoolBonusUSD)
+				require.True(t, ok)
+				require.Equal(t, 100+math.Floor(1.0/float64(test.members))/100, limit)
+			})
+			t.Run("estimate 10", func(t *testing.T) {
+				limit, ok := carpoolWeeklyLimit(10, test.members, DefaultCarpoolBonusUSD)
+				require.True(t, ok)
+				require.Equal(t, test.expected, limit)
+			})
 		})
 	}
 }
@@ -224,10 +241,10 @@ func TestCarpoolQuotaRefresh(t *testing.T) {
 			switch scenario {
 			case "success", "conflict":
 				require.Equal(t, 1, repo.writes)
-				require.Equal(t, 445.0, repo.limit)
+				require.Equal(t, 443.66, repo.limit)
 			case "small":
 				require.Equal(t, 1, repo.writes)
-				require.Equal(t, 102.5, repo.limit)
+				require.Equal(t, 101.0, repo.limit)
 			default:
 				require.Zero(t, repo.writes)
 			}
@@ -251,7 +268,7 @@ func TestCarpoolQuotaRefreshUsesConfiguredBonus(t *testing.T) {
 			svc.now = func() time.Time { return *now }
 			svc.run(context.Background())
 			require.Equal(t, 1, repo.writes)
-			require.Equal(t, 345+bonus, repo.limit)
+			require.Equal(t, 343.66+bonus, repo.limit)
 		})
 	}
 }
@@ -269,10 +286,10 @@ func TestCarpoolQuotaRefreshRoundedLimitPreservesAvailableQuota(t *testing.T) {
 	svc.run(context.Background())
 
 	require.Equal(t, 1, repo.writes)
-	require.Equal(t, 355.0, repo.limit)
-	sub := &UserSubscription{WeeklyUsageUSD: 354}
+	require.Equal(t, 352.52, repo.limit)
+	sub := &UserSubscription{WeeklyUsageUSD: 352}
 	require.True(t, sub.CheckWeeklyLimit(&Group{WeeklyLimitUSD: &repo.limit}, 0))
-	require.Equal(t, 354.0, sub.WeeklyUsageUSD)
+	require.Equal(t, 352.0, sub.WeeklyUsageUSD)
 }
 
 func TestCarpoolQuotaRefreshReconnectedAccountUsesBonusWithoutMinimumFloor(t *testing.T) {
@@ -291,7 +308,7 @@ func TestCarpoolQuotaRefreshReconnectedAccountUsesBonusWithoutMinimumFloor(t *te
 	svc.run(context.Background())
 
 	require.Equal(t, 1, repo.writes)
-	require.Equal(t, 103.33, repo.limit)
+	require.Equal(t, 101.77, repo.limit)
 	require.Equal(t, int64(42), repo.accountID)
 	require.Zero(t, stats.accountID, "quota must use the shared subscription estimate")
 	require.True(t, stats.windowStart.IsZero())
@@ -302,8 +319,8 @@ func TestCarpoolQuotaRefreshReconnectedAccountUsesBonusWithoutMinimumFloor(t *te
 	require.InDelta(t, 5.33, *view.SevenDay.EstimatedTotalCost, 1e-9)
 	sub := &UserSubscription{WeeklyUsageUSD: 100}
 	group := &Group{WeeklyLimitUSD: &repo.limit}
-	require.True(t, sub.CheckWeeklyLimit(group, 3.33))
-	require.False(t, sub.CheckWeeklyLimit(group, 3.34))
+	require.True(t, sub.CheckWeeklyLimit(group, 1.77))
+	require.False(t, sub.CheckWeeklyLimit(group, 1.78))
 	require.Equal(t, 100.0, sub.WeeklyUsageUSD)
 	sub.WeeklyUsageUSD = 175
 	require.False(t, sub.CheckWeeklyLimit(group, 0))
@@ -326,6 +343,82 @@ func TestCarpoolQuotaSamplesSharedAccountOncePerSlot(t *testing.T) {
 	require.Equal(t, 2, repo.writes)
 	require.Equal(t, int64(1), quota.calls.Load())
 	require.Equal(t, []string{"original", "original"}, repo.identities, "apply must validate the sampled identity, even after a rebind")
+}
+
+func TestCarpoolQuotaRefreshAppliesCorrection(t *testing.T) {
+	for _, scenario := range []struct {
+		name       string
+		estimate   float64
+		correction float64
+		expected   float64
+	}{
+		{"positive", 1600, 100, 525},
+		{"negative", 1600, -100, 475},
+		{"fractional without step up", 1603, 0, 500.75},
+		{"do not round total before splitting", 1503.039, 100, 500.75},
+		{"decimal correction at cent boundary", 0.07, -0.03, 100.01},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			_, _, accounts, quota, _, now := sharedUsageFixture(t)
+			estimate := scenario.estimate
+			quota.payload.SubscriptionCost = &SubscriptionCostEstimate{EstimatedTotalCost: &estimate, EstimateSource: "dynamic"}
+			accounts.accounts[0].Extra = map[string]any{CarpoolQuotaCorrectionExtraKey: scenario.correction}
+			repo := &carpoolRepoStub{targets: []CarpoolQuotaTarget{{GroupID: 10, Members: 4, BonusUSD: 100, Revision: *now}}, applied: true}
+			svc := NewCarpoolQuotaService(repo, accounts, quota, nil, nil)
+			svc.now = func() time.Time { return *now }
+			svc.run(context.Background())
+			require.Equal(t, 1, repo.writes)
+			require.Equal(t, scenario.expected, repo.limit)
+		})
+	}
+}
+
+func TestCarpoolQuotaRefreshInvalidCorrectionKeepsExistingCap(t *testing.T) {
+	for _, scenario := range []struct {
+		name     string
+		estimate float64
+		bonus    float64
+	}{
+		{"nonpositive corrected estimate", 50, 100},
+		{"per-member cap below one cent", 100.01, 0},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			_, _, accounts, quota, _, now := sharedUsageFixture(t)
+			quota.payload.SubscriptionCost = &SubscriptionCostEstimate{EstimatedTotalCost: &scenario.estimate, EstimateSource: "dynamic"}
+			accounts.accounts[0].Extra = map[string]any{CarpoolQuotaCorrectionExtraKey: -100.0}
+			repo := &carpoolRepoStub{targets: []CarpoolQuotaTarget{{GroupID: 10, Members: 4, BonusUSD: scenario.bonus, Revision: *now}}, applied: true}
+			svc := NewCarpoolQuotaService(repo, accounts, quota, nil, nil)
+			svc.now = func() time.Time { return *now }
+
+			svc.run(context.Background())
+
+			require.Zero(t, repo.writes, "an invalid or unrepresentable cap must not replace the current one")
+		})
+	}
+}
+
+func TestCarpoolQuotaRefreshAppliesCorrectionOncePerSharedAccount(t *testing.T) {
+	_, _, accounts, quota, stats, now := sharedUsageFixture(t)
+	first := accounts.accounts[0]
+	first.Credentials = map[string]any{"chatgpt_account_id": "original"}
+	first.Extra = map[string]any{CarpoolQuotaCorrectionExtraKey: 100.0}
+	rebound := first
+	rebound.Credentials = map[string]any{"chatgpt_account_id": "rebound"}
+	accounts.groups = map[int64][]Account{10: {first}, 11: {rebound}}
+	estimate := 1600.0
+	quota.payload.SubscriptionCost = &SubscriptionCostEstimate{EstimatedTotalCost: &estimate, EstimateSource: "dynamic"}
+	repo := &carpoolRepoStub{targets: []CarpoolQuotaTarget{
+		{GroupID: 10, Members: 4, BonusUSD: 100}, {GroupID: 11, Members: 4, BonusUSD: 100},
+	}, applied: true}
+	svc := NewCarpoolQuotaService(repo, accounts, quota, stats, nil)
+	svc.now = func() time.Time { return *now }
+
+	svc.run(context.Background())
+
+	require.Equal(t, 2, repo.writes)
+	require.Equal(t, int64(1), quota.calls.Load(), "both groups share one account sample")
+	// 1600+100=1700, 1700/4+100=525；复用同一采样的第二组不得再次加算为 1800/4+100=550。
+	require.Equal(t, 525.0, repo.limit)
 }
 
 func TestSubscriptionCostFirstFullSampleLocksActualCost(t *testing.T) {

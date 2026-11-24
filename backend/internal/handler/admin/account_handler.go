@@ -142,23 +142,84 @@ type CreateAccountRequest struct {
 // UpdateAccountRequest represents update account request
 // 使用指针类型来区分"未提供"和"设置为0"
 type UpdateAccountRequest struct {
-	Name                    string         `json:"name"`
-	Notes                   *string        `json:"notes"`
-	Type                    string         `json:"type" binding:"omitempty,oneof=oauth setup-token apikey upstream bedrock service_account"`
-	Credentials             map[string]any `json:"credentials"`
-	Extra                   map[string]any `json:"extra"`
-	ProxyID                 *int64         `json:"proxy_id"`
-	Concurrency             *int           `json:"concurrency"`
-	Priority                *int           `json:"priority"`
-	RateMultiplier          *float64       `json:"rate_multiplier"`
-	LoadFactor              *int           `json:"load_factor"`
-	Status                  string         `json:"status" binding:"omitempty,oneof=active inactive error"`
-	GroupIDs                *[]int64       `json:"group_ids"`
-	ExpiresAt               *int64         `json:"expires_at"`
-	AutoPauseOnExpired      *bool          `json:"auto_pause_on_expired"`
-	ProbeEnabled            *bool          `json:"upstream_billing_probe_enabled"`
-	RateSyncEnabled         *bool          `json:"upstream_billing_rate_sync_enabled"`
-	ConfirmMixedChannelRisk *bool          `json:"confirm_mixed_channel_risk"` // 用户确认混合渠道风险
+	Name                      string                      `json:"name"`
+	Notes                     *string                     `json:"notes"`
+	Type                      string                      `json:"type" binding:"omitempty,oneof=oauth setup-token apikey upstream bedrock service_account"`
+	Credentials               map[string]any              `json:"credentials"`
+	Extra                     map[string]any              `json:"extra"`
+	ProxyID                   *int64                      `json:"proxy_id"`
+	Concurrency               *int                        `json:"concurrency"`
+	Priority                  *int                        `json:"priority"`
+	RateMultiplier            *float64                    `json:"rate_multiplier"`
+	LoadFactor                *int                        `json:"load_factor"`
+	Status                    string                      `json:"status" binding:"omitempty,oneof=active inactive error"`
+	GroupIDs                  *[]int64                    `json:"group_ids"`
+	ExpiresAt                 *int64                      `json:"expires_at"`
+	AutoPauseOnExpired        *bool                       `json:"auto_pause_on_expired"`
+	ProbeEnabled              *bool                       `json:"upstream_billing_probe_enabled"`
+	RateSyncEnabled           *bool                       `json:"upstream_billing_rate_sync_enabled"`
+	CarpoolQuotaCorrectionUSD *carpoolQuotaCorrectionJSON `json:"carpool_quota_correction_usd"`
+	ConfirmMixedChannelRisk   *bool                       `json:"confirm_mixed_channel_risk"` // 用户确认混合渠道风险
+}
+
+var errInvalidCarpoolQuotaCorrectionJSON = infraerrors.BadRequest(
+	"INVALID_CARPOOL_QUOTA_CORRECTION",
+	"Quota correction must be a finite USD amount with at most two decimal places within ±10000000000",
+)
+
+// A request pointer leaves omitted and null values unset. Non-null numbers
+// are validated as exact cents before any conversion to float64.
+type carpoolQuotaCorrectionJSON float64
+
+func (v *carpoolQuotaCorrectionJSON) UnmarshalJSON(data []byte) error {
+	const maxCents = 1_000_000_000_000
+	const maxCentDigits = 13
+
+	// The JSON decoder has already checked the token syntax. A leading digit
+	// (after the optional minus) distinguishes numbers from other JSON values.
+	mantissa, negative := strings.CutPrefix(string(data), "-")
+	if len(mantissa) == 0 || mantissa[0] < '0' || mantissa[0] > '9' {
+		return errors.New("carpool_quota_correction_usd must be a JSON number")
+	}
+	exponentText := "0"
+	if i := strings.IndexAny(mantissa, "eE"); i >= 0 {
+		mantissa, exponentText = mantissa[:i], mantissa[i+1:]
+	}
+	fractionDigits := 0
+	if whole, fraction, ok := strings.Cut(mantissa, "."); ok {
+		fractionDigits = len(fraction)
+		mantissa = whole + fraction
+	}
+
+	digits := strings.TrimLeft(mantissa, "0")
+	significant := strings.TrimRight(digits, "0")
+	if significant == "" {
+		*v = 0
+		return nil
+	}
+	// Ignore insignificant trailing zeroes. An exact cents value must have
+	// room to append between 0 and 13-len(significant) zeroes. Check this
+	// before adding the exponent or raising 10 to any power.
+	shift := len(digits) - len(significant) - fractionDigits + 2
+	exponent, err := strconv.Atoi(exponentText)
+	if err != nil || exponent < -shift || exponent > maxCentDigits-len(significant)-shift {
+		return errInvalidCarpoolQuotaCorrectionJSON
+	}
+	cents, err := strconv.ParseInt(significant, 10, 64)
+	if err != nil {
+		return errInvalidCarpoolQuotaCorrectionJSON
+	}
+	for range exponent + shift {
+		cents *= 10
+	}
+	if cents > maxCents {
+		return errInvalidCarpoolQuotaCorrectionJSON
+	}
+	if negative {
+		cents = -cents
+	}
+	*v = carpoolQuotaCorrectionJSON(float64(cents) / 100)
+	return nil
 }
 
 // BulkUpdateAccountsRequest represents the payload for bulk editing accounts
@@ -1161,7 +1222,11 @@ func (h *AccountHandler) Update(c *gin.Context) {
 
 	var req UpdateAccountRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "Invalid request: "+err.Error())
+		if errors.Is(err, errInvalidCarpoolQuotaCorrectionJSON) {
+			response.ErrorFrom(c, err)
+		} else {
+			response.BadRequest(c, "Invalid request: "+err.Error())
+		}
 		return
 	}
 	if req.RateMultiplier != nil && *req.RateMultiplier < 0 {
@@ -1179,23 +1244,24 @@ func (h *AccountHandler) Update(c *gin.Context) {
 	skipCheck := req.ConfirmMixedChannelRisk != nil && *req.ConfirmMixedChannelRisk
 
 	account, err := h.adminService.UpdateAccount(c.Request.Context(), accountID, &service.UpdateAccountInput{
-		Name:                  req.Name,
-		Notes:                 req.Notes,
-		Type:                  req.Type,
-		Credentials:           req.Credentials,
-		Extra:                 req.Extra,
-		ProxyID:               req.ProxyID,
-		Concurrency:           req.Concurrency, // 指针类型，nil 表示未提供
-		Priority:              req.Priority,    // 指针类型，nil 表示未提供
-		RateMultiplier:        req.RateMultiplier,
-		LoadFactor:            req.LoadFactor,
-		Status:                req.Status,
-		GroupIDs:              req.GroupIDs,
-		ExpiresAt:             req.ExpiresAt,
-		AutoPauseOnExpired:    req.AutoPauseOnExpired,
-		ProbeEnabled:          req.ProbeEnabled,
-		RateSyncEnabled:       req.RateSyncEnabled,
-		SkipMixedChannelCheck: skipCheck,
+		Name:                      req.Name,
+		Notes:                     req.Notes,
+		Type:                      req.Type,
+		Credentials:               req.Credentials,
+		Extra:                     req.Extra,
+		ProxyID:                   req.ProxyID,
+		Concurrency:               req.Concurrency, // 指针类型，nil 表示未提供
+		Priority:                  req.Priority,    // 指针类型，nil 表示未提供
+		RateMultiplier:            req.RateMultiplier,
+		LoadFactor:                req.LoadFactor,
+		Status:                    req.Status,
+		GroupIDs:                  req.GroupIDs,
+		ExpiresAt:                 req.ExpiresAt,
+		AutoPauseOnExpired:        req.AutoPauseOnExpired,
+		ProbeEnabled:              req.ProbeEnabled,
+		RateSyncEnabled:           req.RateSyncEnabled,
+		CarpoolQuotaCorrectionUSD: (*float64)(req.CarpoolQuotaCorrectionUSD),
+		SkipMixedChannelCheck:     skipCheck,
 	})
 	if err != nil {
 		// 检查是否为混合渠道错误

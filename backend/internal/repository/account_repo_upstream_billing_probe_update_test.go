@@ -17,6 +17,73 @@ import (
 	entsql "entgo.io/ent/dialect/sql"
 )
 
+func TestLockAndMergeAccountProtectsCarpoolQuotaCorrection(t *testing.T) {
+	zero, explicit := 0.0, -25.75
+	for _, tt := range []struct {
+		name          string
+		accountType   string
+		currentShadow bool
+		current       []byte
+		explicit      *float64
+		want          *float64
+		wantErr       error
+	}{
+		{"locked row wins over stale extra", service.AccountTypeOAuth, false, []byte(`-25.75`), nil, &explicit, nil},
+		{"deleted correction stays deleted", service.AccountTypeOAuth, false, nil, nil, nil, nil},
+		{"ineligible result drops correction", service.AccountTypeAPIKey, false, []byte(`-25.75`), nil, nil, nil},
+		{"explicit value wins", service.AccountTypeOAuth, false, []byte(`10`), &explicit, &explicit, nil},
+		{"explicit zero removes key", service.AccountTypeOAuth, false, []byte(`10`), &zero, nil, nil},
+		{"locked shadow rejects explicit intent", service.AccountTypeOAuth, true, nil, &explicit, nil, service.ErrCarpoolQuotaCorrectionAccountInvalid},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			client, mock := newOllamaCloudUsageRepositoryTestClient(t)
+			mock.ExpectQuery(`(?s)SELECT.*extra -> '`+service.CarpoolQuotaCorrectionExtraKey+`'.*FOR NO KEY UPDATE`).
+				WithArgs(int64(27), service.PlatformOpenAI, tt.accountType, "{}", nil).
+				WillReturnRows(sqlmock.NewRows(openCodeGoMergeMockColumns()).
+					AddRow(false, false, true, nil, nil, nil, nil, nil, nil, false, nil, nil, nil, nil, tt.currentShadow, tt.current))
+			account := &service.Account{
+				ID: 27, Platform: service.PlatformOpenAI, Type: tt.accountType,
+				Extra: map[string]any{service.CarpoolQuotaCorrectionExtraKey: 99.0, "note": "keep"},
+			}
+			got, err := lockAndMergeAccountProbeExtra(context.Background(), client, account, nil, nil, tt.explicit)
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, "keep", got["note"])
+				if tt.want == nil {
+					require.NotContains(t, got, service.CarpoolQuotaCorrectionExtraKey)
+				} else {
+					require.Equal(t, *tt.want, got[service.CarpoolQuotaCorrectionExtraKey])
+				}
+			}
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestRepositoryRawAndBulkUpdatesIgnoreCarpoolQuotaCorrection(t *testing.T) {
+	ctx := context.Background()
+	client, mock := newOllamaCloudUsageRepositoryTestClient(t)
+	input := map[string]any{service.CarpoolQuotaCorrectionExtraKey: 99.0, "codex_usage_updated_at": "keep"}
+	rawRepo := newAccountRepositoryWithSQL(client, nil, nil)
+	mock.ExpectExec(`UPDATE accounts SET extra =`).
+		WithArgs(`{"codex_usage_updated_at":"keep"}`, int64(27)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, rawRepo.UpdateExtra(ctx, 27, input))
+	require.NoError(t, mock.ExpectationsWereMet())
+
+	exec := &recordingSQLExecutor{result: rowsAffectedResult(0)}
+	bulkRepo := newAccountRepositoryWithSQL(nil, exec, nil)
+	_, err := bulkRepo.BulkUpdate(ctx, []int64{27}, service.AccountBulkUpdate{Extra: input})
+	require.NoError(t, err)
+	require.NotEmpty(t, exec.execArgs)
+	bulkExtra, ok := exec.execArgs[0][0].([]byte)
+	require.True(t, ok, "bulk extra must serialize as JSON bytes")
+	require.JSONEq(t, `{"codex_usage_updated_at":"keep"}`, string(bulkExtra))
+	require.Contains(t, input, service.CarpoolQuotaCorrectionExtraKey)
+}
+
 func TestLockAndMergeAccountProbeExtraUsesCurrentDatabaseSnapshot(t *testing.T) {
 	tests := []struct {
 		name              string
@@ -81,8 +148,8 @@ func TestLockAndMergeAccountProbeExtraUsesCurrentDatabaseSnapshot(t *testing.T) 
 
 			mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT")+`.*`+regexp.QuoteMeta("FOR NO KEY UPDATE")).
 				WithArgs(int64(27), service.PlatformOpenAI, service.AccountTypeAPIKey, `{"api_key":"sk-test"}`, nil).
-				WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "ollama_group_unchanged", "ollama_proxy_unchanged", "enabled", "rate_sync_enabled", "snapshot", "ollama_session", "ollama_auto", "ollama_snapshot", "opencode_group_unchanged", "opencode_auto", "opencode_snapshot", "grok_observed_models", "upstream_model_metadata"}).
-					AddRow(tt.identityUnchanged, false, true, tt.databaseEnabled, nil, tt.databaseSnapshot, nil, nil, nil, false, nil, nil, nil, nil))
+				WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "ollama_group_unchanged", "ollama_proxy_unchanged", "enabled", "rate_sync_enabled", "snapshot", "ollama_session", "ollama_auto", "ollama_snapshot", "opencode_group_unchanged", "opencode_auto", "opencode_snapshot", "grok_observed_models", "upstream_model_metadata", "is_shadow", "carpool_quota_correction_usd"}).
+					AddRow(tt.identityUnchanged, false, true, tt.databaseEnabled, nil, tt.databaseSnapshot, nil, nil, nil, false, nil, nil, nil, nil, false, nil))
 
 			account := &service.Account{
 				ID:          27,
@@ -91,7 +158,7 @@ func TestLockAndMergeAccountProbeExtraUsesCurrentDatabaseSnapshot(t *testing.T) 
 				Credentials: map[string]any{"api_key": "sk-test"},
 				Extra:       tt.inputExtra,
 			}
-			got, err := lockAndMergeAccountProbeExtra(context.Background(), client, account, nil, nil)
+			got, err := lockAndMergeAccountProbeExtra(context.Background(), client, account, nil, nil, nil)
 			require.NoError(t, err)
 			if tt.wantSnapshot == nil {
 				require.NotContains(t, got, service.UpstreamBillingProbeExtraKey)
@@ -172,8 +239,8 @@ func TestLockAndMergeAccountProbeExtraNeverInfersProbeFromRateSync(t *testing.T)
 
 			mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT")+`.*`+regexp.QuoteMeta("FOR NO KEY UPDATE")).
 				WithArgs(int64(31), service.PlatformOpenAI, service.AccountTypeAPIKey, `{"api_key":"sk-test"}`, nil).
-				WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "ollama_group_unchanged", "ollama_proxy_unchanged", "enabled", "rate_sync_enabled", "snapshot", "ollama_session", "ollama_auto", "ollama_snapshot", "opencode_group_unchanged", "opencode_auto", "opencode_snapshot", "grok_observed_models", "upstream_model_metadata"}).
-					AddRow(true, false, true, tt.databaseEnabled, tt.databaseRateSync, nil, nil, nil, nil, false, nil, nil, nil, nil))
+				WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "ollama_group_unchanged", "ollama_proxy_unchanged", "enabled", "rate_sync_enabled", "snapshot", "ollama_session", "ollama_auto", "ollama_snapshot", "opencode_group_unchanged", "opencode_auto", "opencode_snapshot", "grok_observed_models", "upstream_model_metadata", "is_shadow", "carpool_quota_correction_usd"}).
+					AddRow(true, false, true, tt.databaseEnabled, tt.databaseRateSync, nil, nil, nil, nil, false, nil, nil, nil, nil, false, nil))
 
 			account := &service.Account{
 				ID:          31,
@@ -182,7 +249,7 @@ func TestLockAndMergeAccountProbeExtraNeverInfersProbeFromRateSync(t *testing.T)
 				Credentials: map[string]any{"api_key": "sk-test"},
 			}
 			got, err := lockAndMergeAccountProbeExtra(
-				context.Background(), client, account, tt.explicitProbeEnabled, tt.explicitRateSync,
+				context.Background(), client, account, tt.explicitProbeEnabled, tt.explicitRateSync, nil,
 			)
 			require.NoError(t, err)
 			if tt.wantEnabled == nil {
@@ -211,8 +278,8 @@ func TestLockAndMergeAccountProbeExtraProtectsOllamaManagedFields(t *testing.T) 
 
 			mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT")+`.*`+regexp.QuoteMeta("FOR NO KEY UPDATE")).
 				WithArgs(int64(29), service.PlatformAnthropic, service.AccountTypeAPIKey, `{"api_key":"key","base_url":"https://ollama.com"}`, nil).
-				WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "ollama_group_unchanged", "ollama_proxy_unchanged", "enabled", "rate_sync_enabled", "snapshot", "ollama_session", "ollama_auto", "ollama_snapshot", "opencode_group_unchanged", "opencode_auto", "opencode_snapshot", "grok_observed_models", "upstream_model_metadata"}).
-					AddRow(identityUnchanged, identityUnchanged, true, nil, nil, nil, []byte(`"local-ciphertext"`), []byte(`true`), []byte(`{"status":"ok"}`), false, nil, nil, nil, nil))
+				WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "ollama_group_unchanged", "ollama_proxy_unchanged", "enabled", "rate_sync_enabled", "snapshot", "ollama_session", "ollama_auto", "ollama_snapshot", "opencode_group_unchanged", "opencode_auto", "opencode_snapshot", "grok_observed_models", "upstream_model_metadata", "is_shadow", "carpool_quota_correction_usd"}).
+					AddRow(identityUnchanged, identityUnchanged, true, nil, nil, nil, []byte(`"local-ciphertext"`), []byte(`true`), []byte(`{"status":"ok"}`), false, nil, nil, nil, nil, false, nil))
 
 			account := &service.Account{
 				ID: 29, Platform: service.PlatformAnthropic, Type: service.AccountTypeAPIKey,
@@ -223,7 +290,7 @@ func TestLockAndMergeAccountProbeExtraProtectsOllamaManagedFields(t *testing.T) 
 					service.OllamaCloudUsageSnapshotExtraKey:    map[string]any{"status": "forged"},
 				},
 			}
-			got, err := lockAndMergeAccountProbeExtra(context.Background(), client, account, nil, nil)
+			got, err := lockAndMergeAccountProbeExtra(context.Background(), client, account, nil, nil, nil)
 			require.NoError(t, err)
 			if identityUnchanged {
 				require.Equal(t, "local-ciphertext", got[service.OllamaCloudUsageSessionExtraKey])
@@ -371,8 +438,8 @@ func TestUpdateWithAccountBillingSettingsRollsBackWhenOutboxFails(t *testing.T) 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT")+`.*`+regexp.QuoteMeta("FOR NO KEY UPDATE")).
 		WithArgs(int64(27), service.PlatformOpenAI, service.AccountTypeAPIKey, `{"api_key":"sk-test"}`, nil).
-		WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "ollama_group_unchanged", "ollama_proxy_unchanged", "enabled", "rate_sync_enabled", "snapshot", "ollama_session", "ollama_auto", "ollama_snapshot", "opencode_group_unchanged", "opencode_auto", "opencode_snapshot", "grok_observed_models", "upstream_model_metadata"}).
-			AddRow(true, false, true, []byte(`true`), []byte(`true`), []byte(`{"status":"ok"}`), nil, nil, nil, false, nil, nil, nil, nil))
+		WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "ollama_group_unchanged", "ollama_proxy_unchanged", "enabled", "rate_sync_enabled", "snapshot", "ollama_session", "ollama_auto", "ollama_snapshot", "opencode_group_unchanged", "opencode_auto", "opencode_snapshot", "grok_observed_models", "upstream_model_metadata", "is_shadow", "carpool_quota_correction_usd"}).
+			AddRow(true, false, true, []byte(`true`), []byte(`true`), []byte(`{"status":"ok"}`), nil, nil, nil, false, nil, nil, nil, nil, false, nil))
 	mock.ExpectExec(`(?s)UPDATE .*accounts.*SET.*WHERE .*id.*`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`(?s)SELECT .* FROM "accounts" WHERE "id" = \$1`).

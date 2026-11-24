@@ -76,7 +76,7 @@ func NewSharedSubscriptionUsageService(subscriptions UserSubscriptionRepository,
 }
 
 func (s *SharedSubscriptionUsageService) Get(ctx context.Context, userID, subscriptionID int64) (*SharedSubscriptionUsage, error) {
-	accountID, state, err := s.resolve(ctx, userID, subscriptionID)
+	accountID, _, state, err := s.resolve(ctx, userID, subscriptionID)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +114,7 @@ func (s *SharedSubscriptionUsageService) Get(ctx context.Context, userID, subscr
 		}
 	}
 	// Membership or the sole binding may have changed during the upstream read.
-	currentID, currentState, err := s.resolve(ctx, userID, subscriptionID)
+	currentID, correction, currentState, err := s.resolve(ctx, userID, subscriptionID)
 	if err != nil {
 		return nil, err
 	}
@@ -129,39 +129,51 @@ func (s *SharedSubscriptionUsageService) Get(ctx context.Context, userID, subscr
 		view.ResetCredits = nil
 		view.ResetCreditExpirations = nil
 	}
+	// 访客缓存保存原始订阅预估；每个订阅归属复核后读取当前账号矫正配置，
+	// 只在本次响应的窗口副本上叠加，不污染共享缓存，也不会重复加算。
+	if view.SevenDay != nil && view.SevenDay.EstimatedTotalCost != nil {
+		window := *view.SevenDay
+		if corrected, ok := carpoolCorrectedEstimate(*window.EstimatedTotalCost, correction); ok {
+			estimate := corrected.InexactFloat64()
+			window.EstimatedTotalCost = &estimate
+		} else {
+			window.EstimatedTotalCost = nil
+		}
+		view.SevenDay = &window
+	}
 	return &view, nil
 }
 
-func (s *SharedSubscriptionUsageService) resolve(ctx context.Context, userID, subscriptionID int64) (int64, string, error) {
+func (s *SharedSubscriptionUsageService) resolve(ctx context.Context, userID, subscriptionID int64) (accountID int64, correction float64, state string, err error) {
 	if userID <= 0 || subscriptionID <= 0 {
-		return 0, "", ErrSubscriptionNotFound
+		return 0, 0, "", ErrSubscriptionNotFound
 	}
 	sub, err := s.subscriptions.GetByID(ctx, subscriptionID)
 	if err != nil {
 		if errors.Is(err, ErrSubscriptionNotFound) {
-			return 0, "", ErrSubscriptionNotFound
+			return 0, 0, "", ErrSubscriptionNotFound
 		}
-		return 0, "", infraerrors.New(500, "SHARED_USAGE_UNAVAILABLE", "Shared account usage is unavailable")
+		return 0, 0, "", infraerrors.New(500, "SHARED_USAGE_UNAVAILABLE", "Shared account usage is unavailable")
 	}
 	if sub == nil || sub.UserID != userID || sub.DeletedAt != nil || sub.Status != SubscriptionStatusActive ||
 		!sub.ExpiresAt.After(s.now()) || sub.Group == nil || sub.Group.Status != StatusActive {
-		return 0, "", ErrSubscriptionNotFound
+		return 0, 0, "", ErrSubscriptionNotFound
 	}
 	accounts, page, err := s.accounts.ListWithFilters(ctx, pagination.PaginationParams{Page: 1, PageSize: 2}, "", "", "", "", sub.GroupID, "")
 	if err != nil {
-		return 0, "", infraerrors.New(500, "SHARED_USAGE_UNAVAILABLE", "Shared account usage is unavailable")
+		return 0, 0, "", infraerrors.New(500, "SHARED_USAGE_UNAVAILABLE", "Shared account usage is unavailable")
 	}
 	if len(accounts) > 1 || (page != nil && page.Total > 1) {
-		return 0, "multiple_accounts", nil
+		return 0, 0, "multiple_accounts", nil
 	}
 	if len(accounts) == 0 {
-		return 0, "not_configured", nil
+		return 0, 0, "not_configured", nil
 	}
 	account := accounts[0]
 	if !account.IsOpenAIOAuth() || account.IsShadow() {
-		return 0, "unsupported_account", nil
+		return 0, 0, "unsupported_account", nil
 	}
-	return account.ID, "", nil
+	return account.ID, CarpoolQuotaCorrectionUSD(account.Extra), "", nil
 }
 
 func (s *SharedSubscriptionUsageService) cached(accountID int64) (sharedUsageCacheEntry, bool) {

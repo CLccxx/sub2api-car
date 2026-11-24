@@ -2003,6 +2003,101 @@ describe('EditAccountModal OpenAI 自动使用重置卡', () => {
   })
 })
 
+describe('EditAccountModal carpool quota correction', () => {
+  const correctionInput = '#carpool-quota-correction-usd'
+  const correctionKey = 'carpool_quota_correction_usd'
+
+  beforeEach(() => {
+    authIsSimpleMode.value = true
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+  })
+
+  it('shows a zero default after the reset vote minimum and omits intent when left unchanged', async () => {
+    const account = buildOpenAIOAuthParentAccount()
+    updateAccountMock.mockResolvedValue(account)
+    const wrapper = mountModal(account)
+    const input = wrapper.get<HTMLInputElement>(correctionInput)
+
+    expect(input.element.value).toBe('0.00')
+    expect(wrapper.get('#reset-vote-min-7d-percent').element.parentElement?.nextElementSibling).toBe(input.element.parentElement)
+    expect(wrapper.get('#carpool-quota-correction-usd-hint').text()).toBe('admin.accounts.carpoolQuotaCorrection.hint')
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0][1]).not.toHaveProperty(correctionKey)
+    wrapper.unmount()
+  })
+
+  it.each([buildAccount(), buildOpenAISetupTokenAccount(), buildOpenAISparkShadowAccount()])(
+    'hides the correction when the reset vote setting is unavailable ($name)',
+    (account) => {
+      const wrapper = mountModal(account)
+      expect(wrapper.find(correctionInput).exists()).toBe(false)
+      wrapper.unmount()
+    }
+  )
+
+  it.each([
+    ['+12.34', 12.34],
+    ['-12.34', -12.34],
+    ['9999999900.03', 9_999_999_900.03],
+    ['10000000000.00', 10_000_000_000],
+    ['-10000000000.00', -10_000_000_000],
+    ['', 0]
+  ])('writes %j as a top-level numeric intent without copying the stored correction', async (input, expected) => {
+    const account = buildOpenAIOAuthParentAccount()
+    account.extra = { [correctionKey]: -2.5, reset_vote_min_7d_percent: 80 }
+    updateAccountMock.mockResolvedValue(account)
+    const wrapper = mountModal(account)
+    const field = wrapper.get<HTMLInputElement>(correctionInput)
+
+    expect(field.element.value).toBe('-2.50')
+    await field.setValue(input)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const payload = updateAccountMock.mock.calls[0][1]
+    expect(payload[correctionKey]).toBe(expected)
+    expect(payload.extra).toMatchObject({ reset_vote_min_7d_percent: 80 })
+    expect(payload.extra).not.toHaveProperty(correctionKey)
+    expect(account.extra[correctionKey]).toBe(-2.5)
+    wrapper.unmount()
+  })
+
+  it.each(['0.001', '10000000000.01', '-10000000000.01', 'not a number'])(
+    'rejects invalid input %j without updating the account',
+    async (input) => {
+      const wrapper = mountModal(buildOpenAIOAuthParentAccount())
+      await wrapper.get(correctionInput).setValue(input)
+      await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+      expect(updateAccountMock).not.toHaveBeenCalled()
+      wrapper.unmount()
+    }
+  )
+
+  it('reloads the correction and its comparison value when switching accounts', async () => {
+    const first = buildOpenAIOAuthParentAccount()
+    first.extra = { [correctionKey]: 9.99 }
+    const second = { ...buildOpenAIOAuthParentAccount(), id: 8, extra: { [correctionKey]: 2.5 } }
+    updateAccountMock.mockResolvedValue(second)
+    const wrapper = mountModal(first)
+
+    await wrapper.get(correctionInput).setValue('-15.00')
+    await wrapper.setProps({ account: second })
+    expect(wrapper.get<HTMLInputElement>(correctionInput).element.value).toBe('2.50')
+    await wrapper.get(correctionInput).setValue('+2.5')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const [id, payload] = updateAccountMock.mock.calls[0]
+    expect(id).toBe(second.id)
+    expect(payload).not.toHaveProperty(correctionKey)
+    expect(payload.extra).not.toHaveProperty(correctionKey)
+    wrapper.unmount()
+  })
+})
+
 describe('EditAccountModal gemini explicit cache upstream switch', () => {
   function buildGeminiApiKeyAccount(credentials: Record<string, unknown>) {
     return {
