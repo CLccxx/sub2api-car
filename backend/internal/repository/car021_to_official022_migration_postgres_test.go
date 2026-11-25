@@ -340,6 +340,150 @@ func TestOfficial024SyncPostgresPreservesData(t *testing.T) {
 	}
 }
 
+func TestOfficial025SyncPublishedMigrationBytes(t *testing.T) {
+	official025MigrationFixtures(t)
+}
+
+func official025MigrationFixtures(t *testing.T) (official, car fstest.MapFS) {
+	t.Helper()
+	// Directly pinned from the tagged Git trees. Official v0.2.24 → v0.2.25
+	// changed no SQL; the merged SQL set must still match car.2 exactly.
+	official, _ = migrationFixtureFS(t, carCustomMigrations())
+	assertMigrationFixtureManifest(t, official, "official v0.2.25 (348997267)", 305,
+		"14ecb1a7589a712a246d738e5d91bc90d6ac1569c1fbd5006e9a1c33b3a124a6",
+		"1d018b21afba76dad43b048c39c3ee83d3f7bf3d16178d38e5d720260b7a2879")
+	car, _ = migrationFixtureFS(t, nil)
+	assertMigrationFixtureManifest(t, car, "v0.2.24-car.2 (74e64d4b4)", 314,
+		"926ebd922a940469eb24f6ee3103ad902dc31c19559b933c4c6285183d51b8cc",
+		"fe3f6a0664a33fc1c2b3676f3a060a95d83871a976adf2b0f18434eaed931605")
+	return official, car
+}
+
+func TestOfficial025SyncPostgres(t *testing.T) {
+	official, car := official025MigrationFixtures(t)
+	for _, tc := range []struct {
+		name     string
+		baseline fstest.MapFS
+		isCar    bool
+	}{
+		{name: "v0.2.24-car.2", baseline: car, isCar: true},
+		{name: "official-v0.2.25", baseline: official},
+		{name: "fresh-install"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := officialToCarTestDB(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+
+			var sourceColumns map[string][]string
+			var sourceRows, sourceViews, historical map[string]string
+			if tc.baseline != nil {
+				require.NoError(t, applyMigrationsFS(ctx, db, tc.baseline), "build source schema from released SQL")
+				if tc.isCar {
+					seedOfficial025CarData(t, ctx, db)
+					sourceViews = car022TradeViewSnapshot(t, ctx, db)
+				} else {
+					seedOfficial025OfficialData(t, ctx, db)
+				}
+				sourceColumns = car022MigrationColumns(t, ctx, db)
+				sourceRows = car022MigrationSnapshot(t, ctx, db, sourceColumns)
+				historical = car022MigrationLedger(t, ctx, db)
+				assertOfficial025MigrationLedger(t, historical, tc.baseline)
+			}
+
+			require.NoError(t, ApplyMigrations(ctx, db), "upgrade or install using embedded migrations")
+			current := car022MigrationLedger(t, ctx, db)
+			assertOfficial025MigrationLedger(t, current, car)
+			for name, entry := range historical {
+				require.Equal(t, entry, current[name], "preserve released checksum and applied_at: %s", name)
+			}
+			columns := car022MigrationColumns(t, ctx, db)
+			if tc.baseline != nil {
+				require.Equal(t, sourceRows, car022MigrationSnapshot(t, ctx, db, sourceColumns), "preserve all pre-upgrade rows and columns")
+			}
+			if tc.isCar {
+				require.Equal(t, sourceColumns, columns, "car.2 has no pending SQL")
+				require.Equal(t, sourceViews, car022TradeViewSnapshot(t, ctx, db), "preserve account cycles and trade entitlements")
+				assertCar022TradeEntitlements(t, ctx, db)
+			} else {
+				for _, table := range []string{"carpool_reset_account_monitors", "carpool_subscription_reset_events", "carpool_reset_votes", "subscription_cost_pending_usage", "carpool_quota_trades"} {
+					require.Equal(t, "[]", car022JSONRows(t, ctx, db, `SELECT * FROM public.`+pq.QuoteIdentifier(table)), "must not invent carpool history: %s", table)
+				}
+				assertCar022ColumnPresence(t, ctx, db, "carpool_quota_trades", "sale_price_cents", true)
+				if tc.baseline == nil {
+					seedOfficial025CarData(t, ctx, db) // Exercise the fresh schema before checking restart.
+				} else {
+					var members int
+					var synced sql.NullTime
+					var bonus string
+					require.NoError(t, db.QueryRowContext(ctx, `SELECT carpool_members,carpool_quota_synced_at,carpool_bonus_usd::text FROM groups WHERE id=92001`).Scan(&members, &synced, &bonus))
+					require.Zero(t, members, "do not enable carpool on existing official groups")
+					require.False(t, synced.Valid, "do not invent a historical sync")
+					require.Equal(t, "100.00000000", bonus)
+					var unattributed bool
+					require.NoError(t, db.QueryRowContext(ctx, `SELECT account_cost_started_at IS NULL AND account_cost_observed_at IS NULL
+						AND account_cost_identity_hash IS NULL AND account_cost_pending_id IS NULL FROM usage_logs WHERE id=96001`).Scan(&unattributed))
+					require.True(t, unattributed, "do not attribute pre-upgrade official usage to a new carpool cost cycle")
+				}
+			}
+
+			rows := car022MigrationSnapshot(t, ctx, db, columns)
+			views := car022TradeViewSnapshot(t, ctx, db)
+			require.NoError(t, ApplyMigrations(ctx, db), "restart after migration")
+			require.Equal(t, current, car022MigrationLedger(t, ctx, db), "restart must not rewrite the ledger")
+			require.Equal(t, columns, car022MigrationColumns(t, ctx, db))
+			require.Equal(t, rows, car022MigrationSnapshot(t, ctx, db, columns), "restart must not change any row")
+			require.Equal(t, views, car022TradeViewSnapshot(t, ctx, db), "restart must not change trade entitlements")
+		})
+	}
+}
+
+func assertOfficial025MigrationLedger(t *testing.T, ledger map[string]string, fixture fstest.MapFS) {
+	t.Helper()
+	require.Len(t, ledger, len(fixture))
+	for name, file := range fixture {
+		checksum, appliedAt, ok := strings.Cut(ledger[name], "/")
+		require.True(t, ok, "missing ledger entry for %s", name)
+		require.NotEmpty(t, appliedAt, name)
+		require.Equal(t, fmt.Sprintf("%x", sha256.Sum256([]byte(strings.TrimSpace(string(file.Data))))), checksum, name)
+	}
+}
+
+func seedOfficial025CarData(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	seedCar022MigrationData(t, ctx, db, true, true, true, true, true)
+	// Use the released storage key literally so changing the current Go constant
+	// cannot silently change the shape of the historical correction fixture.
+	var correction string
+	require.NoError(t, db.QueryRowContext(ctx, `UPDATE accounts SET extra=extra || '{"carpool_quota_correction_usd":-17.37}'::jsonb WHERE id=93001
+		RETURNING extra->>'carpool_quota_correction_usd'`).Scan(&correction))
+	require.Equal(t, "-17.37", correction, "seed a nonzero signed correction before taking the snapshot")
+	assertCar022TradeEntitlements(t, ctx, db)
+}
+
+func seedOfficial025OfficialData(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	// Only use official schema here. Keep a non-round, sub-$200 weekly limit so
+	// accidental floor/rounding or historical attribution would be observable.
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO users(id,email,password_hash) VALUES(91001,'official@example.invalid','fixture-password');
+		INSERT INTO groups(id,name,platform,subscription_type,weekly_limit_usd,force_openai_ultrafast)
+		 VALUES(92001,'Existing official subscription','openai','subscription',173.41,true);
+		INSERT INTO accounts(id,name,platform,type,credentials,extra)
+		 VALUES(93001,'Existing official OAuth','openai','oauth','{"chatgpt_account_id":"fixture-official025"}','{"fixture_setting":"preserved"}');
+		INSERT INTO account_groups(account_id,group_id,priority) VALUES(93001,92001,7);
+		INSERT INTO api_keys(id,user_id,key,name,group_id) VALUES(94001,91001,'sk-fixture-official025','Existing official key',92001);
+		INSERT INTO user_subscriptions(id,user_id,group_id,starts_at,expires_at,weekly_usage_usd)
+		 VALUES(95001,91001,92001,'2026-10-01T00:00:00Z','2099-01-01T00:00:00Z',23.4567890123);
+		INSERT INTO usage_logs(id,user_id,api_key_id,account_id,group_id,subscription_id,request_id,model,actual_cost,created_at)
+		 VALUES(96001,91001,94001,93001,92001,95001,'fixture-official025-request','gpt-5.5',0.1111111111,'2026-10-30T12:00:00.123456Z');
+	`)
+	require.NoError(t, err)
+	seedUltrafastMigrationPricing(t, ctx, db)
+	_, err = db.ExecContext(ctx, `UPDATE channel_model_pricing SET ultrafast_multiplier=3.125678 WHERE id=99102`)
+	require.NoError(t, err)
+}
+
 func seedUltrafastMigrationPricing(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
 	_, err := db.ExecContext(ctx, `
