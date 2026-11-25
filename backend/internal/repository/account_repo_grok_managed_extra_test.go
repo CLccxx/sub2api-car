@@ -137,14 +137,8 @@ func TestLockAndMergeAccountProbeExtraKeepsLatestGrokManagedKeys(t *testing.T) {
 			require.NoError(t, err)
 			mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT")+`.*`+regexp.QuoteMeta("FOR NO KEY UPDATE")).
 				WithArgs(int64(41), service.PlatformGrok, tt.accountType, string(credentials), nil).
-				WillReturnRows(sqlmock.NewRows([]string{
-					"identity_unchanged", "ollama_group_unchanged", "ollama_proxy_unchanged",
-					"enabled", "rate_sync_enabled", "snapshot",
-					"ollama_session", "ollama_auto", "ollama_snapshot",
-					"opencode_group_unchanged", "opencode_auto", "opencode_snapshot",
-					"grok_observed_models", "upstream_model_metadata",
-					"is_shadow", "carpool_quota_correction_usd",
-				}).AddRow(false, false, true, nil, nil, nil, nil, nil, nil, false, nil, nil, tt.databaseModels, tt.databaseMetadata, false, nil))
+				WillReturnRows(sqlmock.NewRows(accountProbeMergeMockColumns()).
+					AddRow(false, false, true, nil, nil, nil, nil, nil, nil, false, nil, nil, tt.databaseModels, tt.databaseMetadata, nil, false, nil))
 
 			account := &service.Account{
 				ID:          41,
@@ -153,7 +147,7 @@ func TestLockAndMergeAccountProbeExtraKeepsLatestGrokManagedKeys(t *testing.T) {
 				Credentials: tt.credentials,
 				Extra:       tt.inputExtra,
 			}
-			got, err := lockAndMergeAccountProbeExtra(context.Background(), client, account, nil, nil, nil)
+			got, err := lockAndMergeAccountProbeExtra(context.Background(), client, account, service.AccountBillingSettingsUpdate{}, nil)
 			require.NoError(t, err)
 			require.Equal(t, "from-form", got["note"])
 			if tt.wantModels == nil {

@@ -28,9 +28,7 @@ type accountBillingSettingsAdminRepo struct {
 func (r *accountBillingSettingsAdminRepo) UpdateWithAccountBillingSettings(
 	_ context.Context,
 	account *Account,
-	probeEnabled *bool,
-	rateSyncEnabled *bool,
-	rateMultiplier *float64,
+	settings AccountBillingSettingsUpdate,
 ) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -45,15 +43,15 @@ func (r *accountBillingSettingsAdminRepo) UpdateWithAccountBillingSettings(
 	if updated.Extra == nil {
 		updated.Extra = make(map[string]any)
 	}
-	if probeEnabled != nil {
-		updated.Extra[UpstreamBillingProbeEnabledExtraKey] = *probeEnabled
+	if settings.ProbeEnabled != nil {
+		updated.Extra[UpstreamBillingProbeEnabledExtraKey] = *settings.ProbeEnabled
 	}
-	if rateSyncEnabled != nil {
-		updated.Extra[UpstreamBillingRateSyncEnabledExtraKey] = *rateSyncEnabled
+	if settings.RateSyncEnabled != nil {
+		updated.Extra[UpstreamBillingRateSyncEnabledExtraKey] = *settings.RateSyncEnabled
 	}
 	switch {
-	case rateMultiplier != nil:
-		value := *rateMultiplier
+	case settings.RateMultiplier != nil:
+		value := *settings.RateMultiplier
 		updated.RateMultiplier = &value
 		r.lastExplicitRate = &value
 	case r.concurrentRate != nil:
@@ -116,12 +114,14 @@ func TestUpdateAccountRoutesRateIntentThroughAtomicBillingUpdater(t *testing.T) 
 type carpoolCorrectionAdminRepo struct {
 	*upstreamBillingProbeAdminRepo
 	correctionWrites []float64
+	lastSettings     AccountBillingSettingsUpdate
 }
 
 func (r *carpoolCorrectionAdminRepo) UpdateWithCarpoolQuotaCorrection(
-	ctx context.Context, account *Account, _, _ *bool, _ *float64, correction float64,
+	ctx context.Context, account *Account, settings AccountBillingSettingsUpdate, correction float64,
 ) error {
 	r.correctionWrites = append(r.correctionWrites, correction)
+	r.lastSettings = settings
 	if correction == 0 {
 		delete(account.Extra, CarpoolQuotaCorrectionExtraKey)
 	} else {
@@ -145,6 +145,7 @@ func TestUpdateAccountCarpoolQuotaCorrectionUsesExplicitIntent(t *testing.T) {
 	updated, err := svc.UpdateAccount(ctx, 1, &UpdateAccountInput{CarpoolQuotaCorrectionUSD: &correction})
 	require.NoError(t, err)
 	require.Equal(t, correction, CarpoolQuotaCorrectionUSD(updated.Extra))
+	require.Equal(t, AccountBillingSettingsUpdate{}, repo.lastSettings)
 
 	for _, extra := range []map[string]any{{}, {CarpoolQuotaCorrectionExtraKey: 99.0}} {
 		updated, err = svc.UpdateAccount(ctx, 1, &UpdateAccountInput{Extra: extra})
@@ -153,13 +154,27 @@ func TestUpdateAccountCarpoolQuotaCorrectionUsesExplicitIntent(t *testing.T) {
 	}
 
 	zero := 0.0
+	disabled := false
+	manualRate := 0.5
+	notes := ""
 	updated, err = svc.UpdateAccount(ctx, 1, &UpdateAccountInput{
+		Name:                      "edited",
+		Notes:                     &notes,
+		GroupSyncEnabled:          &disabled,
+		RateMultiplier:            &manualRate,
 		CarpoolQuotaCorrectionUSD: &zero,
 		Extra:                     map[string]any{CarpoolQuotaCorrectionExtraKey: 99.0},
 	})
 	require.NoError(t, err)
 	require.NotContains(t, updated.Extra, CarpoolQuotaCorrectionExtraKey)
 	require.Equal(t, []float64{correction, zero}, repo.correctionWrites)
+	require.Equal(t, AccountBillingSettingsUpdate{
+		GroupSyncEnabled: &disabled,
+		RateMultiplier:   &manualRate,
+		SetName:          true,
+		SetNotes:         true,
+	}, repo.lastSettings)
+	require.Empty(t, repo.updates[1], "correction edits must not use a separate extra write")
 }
 
 func TestUpdateAccountRejectsInvalidCarpoolQuotaCorrection(t *testing.T) {
@@ -662,6 +677,7 @@ func TestUpdateAccountExplicitProbeDisableUsesDedicatedExtraUpdate(t *testing.T)
 	require.Len(t, repo.updates[accountID], 1)
 	require.Equal(t, false, repo.updates[accountID][0][UpstreamBillingProbeEnabledExtraKey])
 	require.Equal(t, false, repo.updates[accountID][0][UpstreamBillingRateSyncEnabledExtraKey])
+	require.Equal(t, false, repo.updates[accountID][0][UpstreamBillingGroupSyncEnabledExtraKey])
 }
 
 func TestUpdateAccountExplicitUnchangedProbeEnabledStillUsesDedicatedExtraUpdate(t *testing.T) {
@@ -1017,4 +1033,24 @@ func TestCreateAccountDropsOpenCodeGoManagedKeys(t *testing.T) {
 	require.NotContains(t, created.Extra, OpenCodeGoUsageAutoRefreshExtraKey)
 	require.NotContains(t, created.Extra, OpenCodeGoUsageSnapshotExtraKey)
 	require.Equal(t, "value", created.Extra["custom"])
+}
+
+func TestCreateAccountGroupSyncIsExplicitAndEnablesOnlyTheProbe(t *testing.T) {
+	enabled, disabled := true, false
+	input := &CreateAccountInput{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+	account, err := buildAccountForCreate(input, map[string]any{UpstreamBillingGroupSyncEnabledExtraKey: true})
+	require.NoError(t, err)
+	require.NotContains(t, account.Extra, UpstreamBillingGroupSyncEnabledExtraKey)
+	input.GroupSyncEnabled = &enabled
+	account, err = buildAccountForCreate(input, nil)
+	require.NoError(t, err)
+	require.True(t, upstreamBillingProbeEnabled(account))
+	require.Equal(t, true, account.Extra[UpstreamBillingGroupSyncEnabledExtraKey])
+	require.False(t, upstreamBillingRateSyncEnabled(account))
+	copyExtra, err := duplicateAccountExtra(account.Extra)
+	require.NoError(t, err)
+	require.NotContains(t, copyExtra, UpstreamBillingGroupSyncEnabledExtraKey)
+	input.ProbeEnabled = &disabled
+	_, err = buildAccountForCreate(input, nil)
+	require.ErrorIs(t, err, ErrUpstreamBillingGroupSyncRequiresProbe)
 }

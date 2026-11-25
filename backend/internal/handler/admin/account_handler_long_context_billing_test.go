@@ -68,6 +68,27 @@ func TestAccountUpdateBindsCarpoolQuotaCorrectionIntent(t *testing.T) {
 
 func accountCorrectionTestPtr(value float64) *float64 { return &value }
 
+func TestAccountUpdateBindsGroupSyncAndCarpoolQuotaCorrectionTogether(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	stub := newStubAdminService()
+	handler := NewAccountHandler(stub, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	router := gin.New()
+	router.PUT("/accounts/:id", handler.Update)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/accounts/1", bytes.NewBufferString(
+		`{"upstream_billing_group_sync_enabled":false,"carpool_quota_correction_usd":-12.34}`,
+	))
+	request.Header.Set("Content-Type", "application/json")
+
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, 1, stub.updateAccountCalls)
+	disabled := false
+	require.Equal(t, &disabled, stub.lastUpdateAccountInput.GroupSyncEnabled)
+	require.Equal(t, accountCorrectionTestPtr(-12.34), stub.lastUpdateAccountInput.CarpoolQuotaCorrectionUSD)
+}
+
 func TestAccountAdminBoundariesRejectMalformedOpenAILongContextBillingValue(t *testing.T) {
 	const malformedExtra = `"extra":{"openai_long_context_billing_enabled":"true"}`
 
