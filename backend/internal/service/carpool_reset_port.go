@@ -33,8 +33,14 @@ type CarpoolResetReceiptRecorder interface {
 	RecordResetReceipt(context.Context, int64, string, string, time.Time, int) error
 }
 
+type carpoolResetBaselineSeeder interface {
+	SourceForAccount(context.Context, int64) (*CarpoolResetSource, error)
+	SeedBaselineBeforeConsume(context.Context, CarpoolResetSource, CarpoolResetObservation) error
+}
+
 type CarpoolResetMonitorRepository interface {
 	CarpoolResetReceiptRecorder
+	carpoolResetBaselineSeeder
 	Sources(context.Context) ([]CarpoolResetSource, error)
 	Source(context.Context) (*CarpoolResetSource, error)
 	ClearBaseline(context.Context) error

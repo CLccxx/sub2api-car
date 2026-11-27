@@ -86,6 +86,59 @@ func carpoolResetSourceForAccount(ctx context.Context, q carpoolResetQuerier, ac
 	}
 	return nil, nil
 }
+func (r *carpoolResetMonitorRepository) SourceForAccount(ctx context.Context, accountID int64) (*service.CarpoolResetSource, error) {
+	return carpoolResetSourceForAccount(ctx, r.db, accountID)
+}
+
+// SeedBaselineBeforeConsume initializes only a missing or obsolete baseline.
+// Unlike Observe, it never advances a current baseline or creates an event.
+func (r *carpoolResetMonitorRepository) SeedBaselineBeforeConsume(ctx context.Context, source service.CarpoolResetSource, observation service.CarpoolResetObservation) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	tx, err := r.beginSourceGuardedTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err = tx.ExecContext(ctx, `INSERT INTO carpool_reset_monitor(id) VALUES(1) ON CONFLICT DO NOTHING`); err != nil {
+		return err
+	}
+	var lockID int
+	if err = tx.QueryRowContext(ctx, `SELECT id FROM carpool_reset_monitor WHERE id=1 FOR UPDATE`).Scan(&lockID); err != nil {
+		return err
+	}
+	current, err := carpoolResetSourceForAccount(ctx, tx, source.AccountID)
+	if err != nil || !sameCarpoolResetSource(current, &source) {
+		return err
+	}
+	baseline, _ := service.AdvanceCarpoolResetBaseline(nil, observation)
+	// Usage and receipt times have second precision. The receipt watermark below
+	// keeps older receipts out while allowing a new receipt from the same second.
+	baseline.Since = baseline.Since.Add(-time.Nanosecond)
+	// Existing receipts predate this first dispatch and must not be attributed to it.
+	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(id),0) FROM carpool_account_reset_receipts
+		WHERE account_id=$1 AND identity_hash=$2`, source.AccountID, source.IdentityHash).Scan(&baseline.ReceiptID); err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(baseline)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO carpool_reset_account_monitors(group_id,account_id,identity_hash,baseline,source_revision,scope_version)
+		VALUES($1,$2,$3,$4::jsonb,$5,$6) ON CONFLICT(account_id) DO UPDATE
+		SET group_id=EXCLUDED.group_id,identity_hash=EXCLUDED.identity_hash,baseline=EXCLUDED.baseline,
+			source_revision=EXCLUDED.source_revision,scope_version=EXCLUDED.scope_version,updated_at=NOW()
+		WHERE carpool_reset_account_monitors.baseline IS NULL OR (
+			(carpool_reset_account_monitors.baseline->'observation'->>'observed_at')::timestamptz < $7
+			AND NOT (carpool_reset_account_monitors.identity_hash=$3 AND (
+				(carpool_reset_account_monitors.scope_version=$6 AND carpool_reset_account_monitors.source_revision=$5)
+				OR (carpool_reset_account_monitors.scope_version=0 AND carpool_reset_account_monitors.source_revision=(SELECT count(*) FROM carpool_reset_source_changes)))))`,
+		source.GroupID, source.AccountID, source.IdentityHash, string(encoded), source.Revision, source.ScopeVersion, observation.ObservedAt); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func sameCarpoolResetSource(a, b *service.CarpoolResetSource) bool {
 	return a != nil && b != nil && a.AccountID == b.AccountID && a.IdentityHash == b.IdentityHash && a.Revision == b.Revision && a.ScopeVersion == b.ScopeVersion
 }

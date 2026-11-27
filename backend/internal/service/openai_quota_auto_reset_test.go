@@ -221,6 +221,8 @@ type autoResetTestQuota struct {
 	failFirst    bool
 	queryCalls   atomic.Int32
 	queryErr     error
+	resetResult  *OpenAIQuotaResetResult
+	onReset      func(context.Context, int64)
 }
 
 func (q *autoResetTestQuota) QueryUsage(context.Context, int64) (*OpenAIQuotaUsage, error) {
@@ -240,7 +242,10 @@ func (q *autoResetTestQuota) CachePostResetSnapshot(context.Context, int64, *Ope
 	return nil
 }
 
-func (q *autoResetTestQuota) ResetCreditTargeted(_ context.Context, _ int64, creditID, redeemRequestID string) (*OpenAIQuotaResetResult, error) {
+func (q *autoResetTestQuota) ResetCreditTargeted(ctx context.Context, accountID int64, creditID, redeemRequestID string) (*OpenAIQuotaResetResult, error) {
+	if q.onReset != nil {
+		q.onReset(ctx, accountID)
+	}
 	if creditID == "" || redeemRequestID == "" {
 		panic("targeted reset identifiers must be present")
 	}
@@ -256,6 +261,9 @@ func (q *autoResetTestQuota) ResetCreditTargeted(_ context.Context, _ int64, cre
 	}
 	if q.releaseReset != nil {
 		<-q.releaseReset
+	}
+	if q.resetResult != nil {
+		return q.resetResult, nil
 	}
 	return &OpenAIQuotaResetResult{Code: "ok", WindowsReset: 2}, nil
 }
@@ -377,6 +385,65 @@ func TestOpenAIQuotaAutoResetService_TimeoutRetryReusesRequestBody(t *testing.T)
 	quota.mu.Unlock()
 	require.Len(t, args, 2)
 	require.Equal(t, args[0], args[1], "超时重试必须复用相同 credit_id 与 redeem_request_id")
+}
+
+func TestOpenAIQuotaAutoResetService_RejectsUnconfirmedCreditResult(t *testing.T) {
+	for _, test := range []struct {
+		name, code, want string
+		windows          int
+	}{
+		{"upstream rejection", "credit_not_available", OpenAIAutoResetStatusFailed, 0},
+		{"zero windows", "ok", OpenAIAutoResetStatusFailed, 0},
+		{"no credit", "no_credit", OpenAIAutoResetStatusNoCredit, 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			svc, repo, quota := newResetThresholdTestFixture(t, nil, 1)
+			quota.usage.autoResetCandidates = []openAIAutoResetCreditCandidate{{ID: "test-credit", ExpiresAt: time.Now().Add(time.Hour).Format(time.RFC3339)}}
+			quota.resetResult = &OpenAIQuotaResetResult{Code: test.code, WindowsReset: test.windows}
+			err := svc.evaluateAccount(context.Background(), repo.account.ID)
+			if test.want == OpenAIAutoResetStatusFailed {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, test.want, openAIAutoResetStateFromExtra(repo.account.Extra).Status)
+			require.Equal(t, int32(1), quota.resetCalls.Load())
+			require.Equal(t, int32(1), quota.queryCalls.Load(), "unconfirmed consumption must not run post-reset recovery")
+		})
+	}
+}
+
+type autoResetTestSeeder struct {
+	source CarpoolResetSource
+	seeded []CarpoolResetObservation
+}
+
+func (s *autoResetTestSeeder) SourceForAccount(context.Context, int64) (*CarpoolResetSource, error) {
+	return &s.source, nil
+}
+
+func (s *autoResetTestSeeder) SeedBaselineBeforeConsume(_ context.Context, source CarpoolResetSource, observation CarpoolResetObservation) error {
+	s.seeded = append(s.seeded, observation)
+	return nil
+}
+
+func TestOpenAIQuotaAutoResetService_SeedsOnlyFirstDispatch(t *testing.T) {
+	svc, repo, quota := newResetThresholdTestFixture(t, nil, 1)
+	quota.usage.AccountID = "upstream"
+	quota.usage.autoResetCandidates = []openAIAutoResetCreditCandidate{{ID: "test-credit", ExpiresAt: time.Now().Add(time.Hour).Format(time.RFC3339)}}
+	seeder := &autoResetTestSeeder{source: CarpoolResetSource{
+		AccountID: repo.account.ID, UpstreamAccountID: "upstream", IdentityHash: CarpoolResetIdentityHash("upstream"),
+	}}
+	svc.resetBaseline = seeder
+	quota.onReset = func(ctx context.Context, id int64) {
+		seedOpenAIAutoResetBaseline(ctx, id, "upstream")
+		seedOpenAIAutoResetBaseline(WithQuotaResetFirstDispatch(ctx), id, "wrong-upstream")
+		require.Empty(t, seeder.seeded)
+		seedOpenAIAutoResetBaseline(WithQuotaResetFirstDispatch(ctx), id, "upstream")
+	}
+	require.NoError(t, svc.evaluateAccount(context.Background(), repo.account.ID))
+	require.Len(t, seeder.seeded, 1)
+	require.Equal(t, 99.0, seeder.seeded[0].Utilization)
 }
 
 // newResetThresholdTestFixture 构造一个 7d 用量已过用卡阈值、处于停调中的账号。

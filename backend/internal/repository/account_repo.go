@@ -2059,10 +2059,6 @@ func (r *accountRepository) BindGroups(ctx context.Context, accountID int64, gro
 	if adminaccess.RestrictedFromContext(ctx) != nil {
 		return r.scopedAdminBindGroups(ctx, accountID, groupIDs)
 	}
-	existingGroupIDs, err := r.loadAccountGroupIDs(ctx, accountID)
-	if err != nil {
-		return err
-	}
 	// 使用事务保证删除旧绑定与创建新绑定的原子性
 	tx, err := r.client.Tx(ctx)
 	if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
@@ -2079,6 +2075,30 @@ func (r *accountRepository) BindGroups(ctx context.Context, accountID int64, gro
 	}
 	if err := lockLiveGroups(ctx, txClient, groupIDs); err != nil {
 		return err
+	}
+	// Serialize concurrent replacements before comparing the actual binding priorities.
+	if _, err := txClient.ExecContext(ctx, `SELECT id FROM accounts WHERE id=$1 FOR NO KEY UPDATE`, accountID); err != nil {
+		return err
+	}
+	bindings, err := txClient.AccountGroup.Query().Where(dbaccountgroup.AccountIDEQ(accountID)).All(ctx)
+	if err != nil {
+		return err
+	}
+	existingGroupIDs := make([]int64, 0, len(bindings))
+	priorities := make(map[int64]int, len(bindings))
+	for _, binding := range bindings {
+		existingGroupIDs = append(existingGroupIDs, binding.GroupID)
+		priorities[binding.GroupID] = binding.Priority
+	}
+	unchanged := len(bindings) == len(groupIDs)
+	for i, groupID := range groupIDs {
+		if priorities[groupID] != i+1 {
+			unchanged = false
+			break
+		}
+	}
+	if unchanged {
+		return nil
 	}
 
 	if _, err := txClient.AccountGroup.Delete().Where(dbaccountgroup.AccountIDEQ(accountID)).Exec(ctx); err != nil {
