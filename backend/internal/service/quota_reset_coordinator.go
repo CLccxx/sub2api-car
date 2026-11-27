@@ -8,3 +8,11 @@ import "context"
 type QuotaResetCoordinator interface {
 	Run(ctx context.Context, accountID int64, creditID, requestID string, execute func(context.Context, string, string) (*OpenAIQuotaResetResult, error)) (*OpenAIQuotaResetResult, error)
 }
+
+type quotaResetFirstDispatchKey struct{}
+
+// WithQuotaResetFirstDispatch marks the first execution of a durable consume
+// intent while the coordinator still holds the account's consumption lock.
+func WithQuotaResetFirstDispatch(ctx context.Context) context.Context {
+	return context.WithValue(ctx, quotaResetFirstDispatchKey{}, true)
+}

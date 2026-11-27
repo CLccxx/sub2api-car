@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"entgo.io/ent/dialect"
+	entsql "entgo.io/ent/dialect/sql"
+	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/Wei-Shaw/sub2api/migrations"
 	"github.com/stretchr/testify/require"
@@ -130,6 +133,117 @@ func TestCarpoolResetMonitorPostgresExactlyOnce(t *testing.T) {
 	var cap float64
 	require.NoError(t, db.QueryRow(`SELECT weekly_limit_usd FROM groups WHERE id=10`).Scan(&cap))
 	require.Equal(t, 325.0, cap)
+}
+
+func TestCarpoolResetMonitorPostgresUnchangedBindings(t *testing.T) {
+	db := carpoolMonitorTestDB(t)
+	ctx := context.Background()
+	_, err := db.Exec(`ALTER TABLE account_groups ADD COLUMN priority int NOT NULL DEFAULT 1,
+		ADD COLUMN created_at timestamptz NOT NULL DEFAULT now();
+		UPDATE account_groups SET priority=2 WHERE group_id=20;
+		CREATE TABLE scheduler_outbox(event_type text, account_id bigint, group_id bigint, payload jsonb)`)
+	require.NoError(t, err)
+	monitor, event, now := carpoolMonitorPendingEvent(t, db)
+	before, err := monitor.SourceForAccount(ctx, 9)
+	require.NoError(t, err)
+	client := dbent.NewClient(dbent.Driver(entsql.OpenDB(dialect.Postgres, db)))
+	repo := newAccountRepositoryWithSQL(client, db, nil)
+	require.NoError(t, repo.BindGroups(ctx, 9, []int64{10, 20}))
+	after, err := monitor.SourceForAccount(ctx, 9)
+	require.NoError(t, err)
+	require.Equal(t, before.Revision, after.Revision)
+	var notifications int
+	require.NoError(t, db.QueryRow(`SELECT count(*) FROM scheduler_outbox`).Scan(&notifications))
+	require.Zero(t, notifications)
+	applied, err := monitor.ApplyEvent(ctx, event.ID, now, now)
+	require.NoError(t, err)
+	require.Equal(t, 2, applied.ResetCount)
+
+	require.NoError(t, repo.BindGroups(ctx, 9, []int64{20, 10}))
+	var first int64
+	require.NoError(t, db.QueryRow(`SELECT group_id FROM account_groups WHERE account_id=9 AND priority=1`).Scan(&first))
+	require.Equal(t, int64(20), first)
+	require.NoError(t, db.QueryRow(`SELECT count(*) FROM scheduler_outbox`).Scan(&notifications))
+	require.Equal(t, 1, notifications)
+}
+
+func TestCarpoolResetMonitorPostgresPreConsumeBaseline(t *testing.T) {
+	for _, scenario := range []string{"weekly reset", "obsolete baseline", "five hour only", "source changed"} {
+		t.Run(scenario, func(t *testing.T) {
+			db := carpoolMonitorTestDB(t)
+			repo := NewCarpoolResetMonitorRepository(db)
+			ctx := context.Background()
+			source, err := repo.SourceForAccount(ctx, 9)
+			require.NoError(t, err)
+			require.NotNil(t, source)
+			now := time.Now().UTC().Truncate(time.Second)
+			pre := service.CarpoolResetObservation{ObservedAt: now, ResetAt: now.Add(24 * time.Hour), Utilization: 90}
+			if scenario == "obsolete baseline" {
+				old := pre
+				old.ObservedAt = now.Add(-time.Minute)
+				old.Utilization = 0
+				event, err := repo.Observe(ctx, *source, old)
+				require.NoError(t, err)
+				require.Nil(t, event)
+				_, err = db.Exec(`DELETE FROM account_groups WHERE account_id=9 AND group_id=20; INSERT INTO account_groups VALUES(9,20)`)
+				require.NoError(t, err)
+				current, err := repo.SourceForAccount(ctx, 9)
+				require.NoError(t, err)
+				require.NotEqual(t, source.Revision, current.Revision)
+				source = current
+			}
+			require.NoError(t, repo.SeedBaselineBeforeConsume(ctx, *source, pre))
+			// A valid baseline must not be replaced by a later seed attempt.
+			later := pre
+			later.ObservedAt = now.Add(time.Second)
+			later.Utilization = 1
+			require.NoError(t, repo.SeedBaselineBeforeConsume(ctx, *source, later))
+			require.NoError(t, repo.RecordResetReceipt(ctx, 9, source.IdentityHash, "first-consume", now, 1))
+			if scenario == "source changed" {
+				_, err := db.Exec(`DELETE FROM account_groups WHERE account_id=9 AND group_id=20`)
+				require.NoError(t, err)
+				source, err = repo.SourceForAccount(ctx, 9)
+				require.NoError(t, err)
+				require.NotNil(t, source)
+			}
+			post := pre
+			post.ObservedAt = now.Add(time.Minute)
+			event, err := repo.Observe(ctx, *source, post)
+			require.NoError(t, err)
+			require.Nil(t, event, "a receipt alone does not confirm a weekly reset")
+			post.ObservedAt = post.ObservedAt.Add(time.Minute)
+			if scenario != "five hour only" {
+				post.Utilization = 0.5
+			}
+			event, err = repo.Observe(ctx, *source, post)
+			require.NoError(t, err)
+			if scenario == "five hour only" || scenario == "source changed" {
+				require.Nil(t, event)
+				var weekly float64
+				require.NoError(t, db.QueryRow(`SELECT weekly_usage_usd FROM user_subscriptions WHERE id=1`).Scan(&weekly))
+				require.Equal(t, 20.0, weekly)
+				return
+			}
+			require.NotNil(t, event)
+			require.Equal(t, "receipt", event.Reason)
+			applied, err := repo.ApplyEvent(ctx, event.ID, post.ObservedAt, now)
+			require.NoError(t, err)
+			require.Equal(t, 2, applied.ResetCount)
+			var weekly float64
+			require.NoError(t, db.QueryRow(`SELECT weekly_usage_usd FROM user_subscriptions WHERE id=1`).Scan(&weekly))
+			require.Zero(t, weekly)
+			_, err = db.Exec(`UPDATE user_subscriptions SET weekly_usage_usd=7 WHERE id=1`)
+			require.NoError(t, err)
+			post.ObservedAt = post.ObservedAt.Add(time.Minute)
+			again, err := repo.Observe(ctx, *source, post)
+			require.NoError(t, err)
+			require.Nil(t, again)
+			_, err = repo.ApplyEvent(ctx, event.ID, post.ObservedAt, now)
+			require.NoError(t, err)
+			require.NoError(t, db.QueryRow(`SELECT weekly_usage_usd FROM user_subscriptions WHERE id=1`).Scan(&weekly))
+			require.Equal(t, 7.0, weekly)
+		})
+	}
 }
 
 func TestCarpoolResetMonitorPostgresRollback(t *testing.T) {

@@ -157,6 +157,9 @@ func (r *quotaResetCoordinator) Run(ctx context.Context, accountID int64, credit
 		return nil, err
 	}
 	// The intent transaction is committed, while its session lock remains held.
+	if op.dispatchCount == 1 {
+		ctx = service.WithQuotaResetFirstDispatch(ctx)
+	}
 	result, err := execute(ctx, op.creditID, op.requestID)
 	if err != nil {
 		return nil, err

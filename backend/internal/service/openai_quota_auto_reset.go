@@ -66,6 +66,26 @@ type openAIAutoResetQuota interface {
 }
 
 type openAIAutoResetContextKey struct{}
+type openAIAutoResetBaselineKey struct{}
+
+type openAIAutoResetBaseline struct {
+	seeder      carpoolResetBaselineSeeder
+	source      CarpoolResetSource
+	observation CarpoolResetObservation
+}
+
+func seedOpenAIAutoResetBaseline(ctx context.Context, accountID int64, upstreamAccountID string) {
+	first, _ := ctx.Value(quotaResetFirstDispatchKey{}).(bool)
+	baseline, ok := ctx.Value(openAIAutoResetBaselineKey{}).(openAIAutoResetBaseline)
+	if !first || !ok || baseline.source.AccountID != accountID ||
+		baseline.source.IdentityHash != CarpoolResetIdentityHash(upstreamAccountID) ||
+		time.Since(baseline.observation.ObservedAt) > 2*time.Minute || !baseline.observation.ResetAt.After(time.Now()) {
+		return
+	}
+	if err := baseline.seeder.SeedBaselineBeforeConsume(ctx, baseline.source, baseline.observation); err != nil {
+		slog.Warn("carpool_reset_baseline_seed_failed", "account_id", accountID, "error", err)
+	}
+}
 
 func withOpenAIAutoResetContext(ctx context.Context) context.Context {
 	if ctx == nil {
@@ -89,13 +109,14 @@ type openAIAutoResetRecovery interface {
 // OpenAIQuotaAutoResetService 通过小型去重队列承接实时信号，并用分钟扫描补偿
 // 重启、漏事件和多实例读取；真正消费仍由 PostgreSQL 幂等记录串行化。
 type OpenAIQuotaAutoResetService struct {
-	accountRepo AccountRepository
-	quota       openAIAutoResetQuota
-	recoverer   openAIAutoResetRecovery
-	idempotency *IdempotencyCoordinator
-	audit       *AuditLogService
-	settings    *SettingService
-	leaderLock  LeaderLockCache
+	accountRepo   AccountRepository
+	quota         openAIAutoResetQuota
+	recoverer     openAIAutoResetRecovery
+	idempotency   *IdempotencyCoordinator
+	audit         *AuditLogService
+	settings      *SettingService
+	leaderLock    LeaderLockCache
+	resetBaseline carpoolResetBaselineSeeder
 
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -331,6 +352,15 @@ func (s *OpenAIQuotaAutoResetService) evaluateAccount(ctx context.Context, accou
 		return err
 	}
 
+	var resetSource *CarpoolResetSource
+	if s.resetBaseline != nil {
+		source, sourceErr := s.resetBaseline.SourceForAccount(ctx, accountID)
+		if sourceErr != nil {
+			slog.Warn("carpool_reset_baseline_source_failed", "account_id", accountID, "error", sourceErr)
+		} else {
+			resetSource = source
+		}
+	}
 	usage, err := s.quota.QueryUsage(ctx, accountID)
 	if err != nil || usage == nil {
 		return s.failState(ctx, accountID, checking, "RESET_CREDIT_QUERY_FAILED", err)
@@ -419,6 +449,13 @@ func (s *OpenAIQuotaAutoResetService) evaluateAccount(ctx context.Context, accou
 		TTL:        openAIAutoResetAttemptTTL,
 		RequireKey: true,
 	}, func(execCtx context.Context) (any, error) {
+		if resetSource != nil {
+			if observation, valid := ReadCarpoolResetObservation(usage, resetSource.UpstreamAccountID, time.Now()); valid {
+				execCtx = context.WithValue(execCtx, openAIAutoResetBaselineKey{}, openAIAutoResetBaseline{
+					seeder: s.resetBaseline, source: *resetSource, observation: observation,
+				})
+			}
+		}
 		resetResult, resetErr := s.quota.ResetCreditTargeted(execCtx, accountID, candidate.ID, redeemRequestID)
 		if resetErr != nil {
 			return nil, resetErr
@@ -455,6 +492,11 @@ func (s *OpenAIQuotaAutoResetService) evaluateAccount(ctx context.Context, accou
 		}
 		s.recordAudit(accountID, assessment, available, "no_credit", 0, noCredit.ErrorCode)
 		return s.persistState(ctx, accountID, noCredit)
+	}
+	if consumeResult.Code != "ok" || consumeResult.WindowsReset <= 0 {
+		const code = "RESET_CREDIT_NOT_CONFIRMED"
+		s.recordAudit(accountID, assessment, available, "failed", 0, code)
+		return s.failState(ctx, accountID, resetting, code, nil)
 	}
 	postCtx, cancelPost := context.WithTimeout(context.WithoutCancel(ctx), 8*time.Second)
 	post := RunOpenAIQuotaResetPostProcess(postCtx, accountID, s.quota, s.recoverer, s.accountRepo.GetByID)
